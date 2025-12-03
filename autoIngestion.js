@@ -1,0 +1,132 @@
+// travel-tour-blog-server/autoIngestion.js
+
+const cron = require('node-cron');
+const axios = require('axios');
+const { managementClient } = require('./contentful/client');
+
+// --- CONFIGURATION ---
+const EXTERNAL_API_URL = 'https://newsapi.org/v2/everything';
+const CRON_SCHEDULE = '0 */6 * * *'; // Runs every 6 hours (at minute 0)
+// The unique ID for your "Auto Ingestion Bot" Author Entry
+const AUTHOR_FALLBACK_ID = '4WOacPkmp1DHGgDf1ToJGw'; 
+const CONTENT_TYPE_ID = 'theConclaveBlog'; // Your specified Content Type ID
+
+/**
+ * Creates a unique, URL-friendly slug.
+ */
+const createSlug = (text) => {
+    return text.toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .trim()
+        .replace(/\s+/g, '-')
+        .slice(0, 60);
+};
+
+/**
+ * Creates a Rich Text JSON structure from a plain string.
+ */
+const createRichTextContent = (content) => {
+  return {
+    nodeType: 'document',
+    data: {},
+    content: [
+      {
+        nodeType: 'paragraph',
+        data: {},
+        content: [
+          {
+            nodeType: 'text',
+            value: content,
+            marks: [],
+            data: {},
+          },
+        ],
+      },
+    ],
+  };
+};
+
+/**
+ * Main function to run the ingestion process.
+ */
+const runIngestion = async () => {
+  try {
+    console.log(`[INGEST] Starting ingestion job at ${new Date().toISOString()}`);
+    
+    // 1. Fetch data from external source
+    const newsResponse = await axios.get(EXTERNAL_API_URL, {
+      params: {
+        q: 'travel AND tourism destination tips', // More specific query
+        language: 'en',
+        pageSize: 5,
+        apiKey: process.env.NEWS_API_KEY, // Uses key from .env
+      },
+    });
+
+    const articles = newsResponse.data.articles;
+    if (!articles || articles.length === 0) {
+      console.log('[INGEST] No new articles found from external API.');
+      return;
+    }
+
+    const environment = await managementClient;
+    let createdCount = 0;
+
+    for (const article of articles) {
+      const slug = createSlug(article.title);
+      // Create a unique entry ID by combining 'auto-' with the slug and a timestamp segment
+      const entryId = `auto-${slug}-${Date.now().toString().slice(-4)}`; 
+
+      if (!article.description || article.content.length < 50) continue;
+      
+      const richTextContent = createRichTextContent(article.content || article.description);
+      
+      try {
+        // 2. Create and Publish Entry in Contentful
+        const newEntry = await environment.createEntryWithId(
+          CONTENT_TYPE_ID, 
+          entryId,      
+          {
+            fields: {
+              title: { 'en-US': article.title.substring(0, 250) },
+              slug: { 'en-US': slug },
+              content: { 'en-US': richTextContent },
+              category: { 'en-US': 'Tourism' }, // Default category
+              publishedDate: { 'en-US': new Date(article.publishedAt).toISOString() },
+              author: {
+                'en-US': { sys: { type: 'Link', linkType: 'Entry', id: AUTHOR_FALLBACK_ID } },
+              },
+            },
+          }
+        );
+
+        await newEntry.publish();
+        createdCount++;
+        console.log(`[INGEST] Successfully created and published: ${article.title}`);
+      } catch (e) {
+        console.error(`[INGEST] Error creating entry ${article.title}:`, e.message);
+      }
+    }
+
+    console.log(`[INGEST] Job finished. Total posts created: ${createdCount}`);
+
+  } catch (error) {
+    console.error('[INGEST] CRITICAL Ingestion Job Failed:', error.message);
+  }
+};
+
+/**
+ * Initializes and starts the cron job.
+ */
+const startIngestionJob = () => {
+  cron.schedule(CRON_SCHEDULE, runIngestion, {
+    scheduled: true,
+    timezone: "Etc/UTC" 
+  });
+  // Run once immediately when the server starts
+  runIngestion(); 
+};
+
+module.exports = { 
+    startIngestionJob 
+};

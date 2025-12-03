@@ -1,0 +1,29 @@
+# Dependencies
+####################
+/node_modules
+/dist
+/build
+
+# Logs and Caches
+####################
+npm-debug.log
+yarn-error.log
+.eslintcache
+/coverage
+
+# Environment Variables and Secrets (CRITICAL)
+##############################################
+.env
+.env.local
+.env.development
+.env.production
+.env.staging
+
+# OS Generated Files
+#####################
+.DS_Store
+Thumbs.db
+
+# Nodemon (Used during development)
+##################################
+.nodemon.json
