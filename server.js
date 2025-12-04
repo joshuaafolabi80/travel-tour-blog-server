@@ -3,6 +3,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const multer = require('multer'); // Import multer for file handling
 const { cdaClient, managementClient } = require('./contentful/client');
 const { startIngestionJob } = require('./autoIngestion');
 
@@ -10,7 +11,10 @@ const app = express();
 const PORT = process.env.PORT || 5000;
 const CONTENT_TYPE_ID = 'theConclaveBlog'; // Your specified Content Type ID
 
-// Use the CLIENT_URL from .env
+// Setup multer storage (using memory storage for Contentful upload)
+const upload = multer({ storage: multer.memoryStorage() });
+
+// Use the CLIENT_URL from .env (retrieved from Render environment)
 const CLIENT_URL = process.env.CLIENT_URL;
 
 // Middleware
@@ -20,7 +24,49 @@ app.use(cors({
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
+
+// We only use JSON parser for non-file requests. File requests handled by multer.
 app.use(express.json());
+
+// --- Contentful Asset Upload Helper Function ---
+const uploadAndLinkAsset = async (file, environment) => {
+    if (!file) return null;
+
+    try {
+        // 1. Upload the file binary data to Contentful
+        let asset = await environment.createAssetFromFiles({
+            fields: {
+                title: { 'en-US': file.originalname },
+                file: {
+                    'en-US': {
+                        file: file.buffer, // Binary buffer from multer memory storage
+                        fileName: file.originalname,
+                        contentType: file.mimetype,
+                    },
+                },
+            },
+        });
+        
+        console.log(`[CMA] Asset upload started for: ${file.originalname}`);
+
+        // 2. Process the asset (required before publishing)
+        asset = await asset.processForLocale('en-US');
+        
+        // 3. Publish the processed asset
+        asset = await asset.publish();
+        
+        console.log(`[CMA] Asset published successfully. ID: ${asset.sys.id}`);
+
+        // 4. Return the Asset Link structure
+        return {
+            'en-US': { sys: { type: 'Link', linkType: 'Asset', id: asset.sys.id } },
+        };
+    } catch (e) {
+        console.error('Error during Contentful Asset upload/publish:', e.message);
+        throw new Error('Failed to upload and link image asset.');
+    }
+};
+
 
 // --- 1. CDA Endpoint (Public Read Access) ---
 // Fetches all published posts for the public frontend.
@@ -29,6 +75,7 @@ app.get('/api/blog-posts', async (req, res) => {
     const entries = await cdaClient.getEntries({
       content_type: CONTENT_TYPE_ID, 
       order: '-fields.publishedDate', // Sort by date descending
+      include: 2, // Include linked Author and Featured Image data
     });
     
     // Return only the items array containing the posts
@@ -40,73 +87,81 @@ app.get('/api/blog-posts', async (req, res) => {
 });
 
 // --- 2. CMA Endpoint (Admin Write Access) ---
-// Handles POST requests from your Admin panel to create a new post.
-app.post('/api/admin/create-post', async (req, res) => {
-  // Ensure your Admin frontend sends authorId (for a human author) and imageUrl (optional)
-  const { title, slug, content, authorId, category, imageUrl } = req.body; 
+// Handles POST requests from your Admin panel to create a new post with optional file upload.
+app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, res) => {
+    // req.file contains the uploaded file buffer (from multer)
+    // req.body contains text fields (title, slug, content, etc.)
 
-  if (!title || !slug || !content || !authorId || !category) {
-    return res.status(400).json({ message: 'Missing required fields: title, slug, content, authorId, and category.' });
-  }
+    const { title, slug, content, authorId, category } = req.body; 
+    const featuredImageFile = req.file;
 
-  // Contentful Rich Text format is complex and requires specific JSON.
-  const richTextContent = {
-    nodeType: 'document',
-    data: {},
-    content: [
-      {
-        nodeType: 'paragraph',
+    if (!title || !slug || !content || !authorId || !category) {
+      // Clean up file if present but required fields are missing
+      if (featuredImageFile) console.warn('File uploaded but post data is incomplete.');
+      return res.status(400).json({ message: 'Missing required fields: title, slug, content, authorId, and category.' });
+    }
+
+    // Contentful Rich Text format is complex
+    const richTextContent = {
+        nodeType: 'document',
         data: {},
         content: [
-          {
-            nodeType: 'text',
-            value: content, // Simple text from the Admin form
-            marks: [],
-            data: {},
-          },
+            {
+                nodeType: 'paragraph',
+                data: {},
+                content: [
+                    { nodeType: 'text', value: content, marks: [], data: {} },
+                ],
+            },
         ],
-      },
-    ],
-  };
+    };
 
-  try {
-    const environment = await managementClient;
-    
-    // Create the new entry using the slug as the unique ID
-    const newEntry = await environment.createEntryWithId(
-      CONTENT_TYPE_ID, 
-      slug,       
-      {
-        fields: {
-          title: { 'en-US': title },
-          slug: { 'en-US': slug },
-          content: { 'en-US': richTextContent },
-          category: { 'en-US': category },
-          publishedDate: { 'en-US': new Date().toISOString() },
-          // Link the human author entry
-          author: {
-            'en-US': { sys: { type: 'Link', linkType: 'Entry', id: authorId } },
-          },
-          // Featured Image logic would go here if you uploaded the image to Contentful first
-        },
-      }
-    );
+    try {
+        const environment = await managementClient;
+        let featuredImageLink = null;
+        
+        // --- 1. Upload Featured Image if provided ---
+        if (featuredImageFile) {
+            featuredImageLink = await uploadAndLinkAsset(featuredImageFile, environment);
+        }
 
-    // Publish the entry to make it visible
-    await newEntry.publish();
+        // --- 2. Create and Publish Entry ---
+        const newEntry = await environment.createEntryWithId(
+            CONTENT_TYPE_ID, 
+            slug,       
+            {
+                fields: {
+                    title: { 'en-US': title },
+                    slug: { 'en-US': slug },
+                    content: { 'en-US': richTextContent },
+                    category: { 'en-US': category },
+                    publishedDate: { 'en-US': new Date().toISOString() },
+                    // Link the human author entry (using the ID from the frontend)
+                    author: {
+                        'en-US': { sys: { type: 'Link', linkType: 'Entry', id: authorId } },
+                    },
+                    // Link the featured image asset (if uploaded)
+                    ...(featuredImageLink && { featuredImage: featuredImageLink }),
+                },
+            }
+        );
 
-    res.status(201).json({ 
-        message: 'Blog post created and published successfully!', 
-        entryId: newEntry.sys.id 
-    });
-  } catch (error) {
-    console.error('Error creating post in Contentful:', error.message);
-    res.status(500).json({ 
-        message: 'Failed to create blog post via CMA.', 
-        details: error.message 
-    });
-  }
+        // Publish the entry to make it visible
+        await newEntry.publish();
+
+        res.status(201).json({ 
+            message: 'Blog post created and published successfully!', 
+            entryId: newEntry.sys.id 
+        });
+    } catch (error) {
+        console.error('Error creating post in Contentful:', error.message);
+        res.status(500).json({ 
+            message: 'Failed to create blog post via CMA. Details in server logs.', 
+            details: error.message 
+        });
+    }
 });
+
 
 // Start the CRON job when the server starts
 startIngestionJob();
