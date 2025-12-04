@@ -3,14 +3,14 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer'); // Import multer for file handling
-// CRITICAL FIX: Change import from 'managementClient' to 'getManagementEnvironment'
+const multer = require('multer'); 
+// FIX: Change import from 'managementClient' to 'getManagementEnvironment'
 const { cdaClient, getManagementEnvironment } = require('./contentful/client');
 const { startIngestionJob } = require('./autoIngestion');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
-const CONTENT_TYPE_ID = 'theConclaveBlog'; // Your specified Content Type ID
+const CONTENT_TYPE_ID = 'theConclaveBlog'; 
 
 // Setup multer storage (using memory storage for Contentful upload)
 const upload = multer({ storage: multer.memoryStorage() });
@@ -19,28 +19,25 @@ const upload = multer({ storage: multer.memoryStorage() });
 const CLIENT_URL = process.env.CLIENT_URL;
 
 // Middleware
-// Configure CORS to only allow requests from your authorized frontend domain
 app.use(cors({
   origin: CLIENT_URL,
   methods: ['GET', 'POST'],
   allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
-// We only use JSON parser for non-file requests. File requests handled by multer.
 app.use(express.json());
 
 // --- Contentful Asset Upload Helper Function ---
 const uploadAndLinkAsset = async (file, environment) => {
     if (!file) return null;
-
+    // ... (rest of the asset upload logic remains the same) ...
     try {
-        // 1. Upload the file binary data to Contentful
         let asset = await environment.createAssetFromFiles({
             fields: {
                 title: { 'en-US': file.originalname },
                 file: {
                     'en-US': {
-                        file: file.buffer, // Binary buffer from multer memory storage
+                        file: file.buffer, 
                         fileName: file.originalname,
                         contentType: file.mimetype,
                     },
@@ -49,16 +46,10 @@ const uploadAndLinkAsset = async (file, environment) => {
         });
         
         console.log(`[CMA] Asset upload started for: ${file.originalname}`);
-
-        // 2. Process the asset (required before publishing)
         asset = await asset.processForLocale('en-US');
-        
-        // 3. Publish the processed asset
         asset = await asset.publish();
-        
         console.log(`[CMA] Asset published successfully. ID: ${asset.sys.id}`);
 
-        // 4. Return the Asset Link structure
         return {
             'en-US': { sys: { type: 'Link', linkType: 'Asset', id: asset.sys.id } },
         };
@@ -70,16 +61,14 @@ const uploadAndLinkAsset = async (file, environment) => {
 
 
 // --- 1. CDA Endpoint (Public Read Access) ---
-// Fetches all published posts for the public frontend.
 app.get('/api/blog-posts', async (req, res) => {
+  // ... (CDA logic remains the same) ...
   try {
     const entries = await cdaClient.getEntries({
       content_type: CONTENT_TYPE_ID, 
-      order: '-fields.publishedDate', // Sort by date descending
-      include: 2, // Include linked Author and Featured Image data
+      order: '-fields.publishedDate', 
+      include: 2, 
     });
-    
-    // Return only the items array containing the posts
     res.json(entries.items);
   } catch (error) {
     console.error('Error fetching blog posts:', error.message);
@@ -88,21 +77,15 @@ app.get('/api/blog-posts', async (req, res) => {
 });
 
 // --- 2. CMA Endpoint (Admin Write Access) ---
-// Handles POST requests from your Admin panel to create a new post with optional file upload.
 app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, res) => {
-    // req.file contains the uploaded file buffer (from multer)
-    // req.body contains text fields (title, slug, content, etc.)
-
     const { title, slug, content, authorId, category } = req.body; 
     const featuredImageFile = req.file;
 
     if (!title || !slug || !content || !authorId || !category) {
-      // Clean up file if present but required fields are missing
       if (featuredImageFile) console.warn('File uploaded but post data is incomplete.');
       return res.status(400).json({ message: 'Missing required fields: title, slug, content, authorId, and category.' });
     }
 
-    // Contentful Rich Text format is complex
     const richTextContent = {
         nodeType: 'document',
         data: {},
@@ -119,17 +102,15 @@ app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, r
 
     try {
         // CRITICAL FIX: Call the getter function to get the resolved environment object
-        const environment = await getManagementEnvironment();
+        const environment = await getManagementEnvironment(); // <--- FIX IS HERE
         let featuredImageLink = null;
         
         // --- 1. Upload Featured Image if provided ---
         if (featuredImageFile) {
-            // Use the correctly resolved 'environment' object
             featuredImageLink = await uploadAndLinkAsset(featuredImageFile, environment);
         }
 
         // --- 2. Create and Publish Entry ---
-        // Use the correctly resolved 'environment' object
         const newEntry = await environment.createEntryWithId(
             CONTENT_TYPE_ID, 
             slug,       
@@ -140,17 +121,14 @@ app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, r
                     content: { 'en-US': richTextContent },
                     category: { 'en-US': category },
                     publishedDate: { 'en-US': new Date().toISOString() },
-                    // Link the human author entry (using the ID from the frontend)
                     author: {
                         'en-US': { sys: { type: 'Link', linkType: 'Entry', id: authorId } },
                     },
-                    // Link the featured image asset (if uploaded)
                     ...(featuredImageLink && { featuredImage: featuredImageLink }),
                 },
             }
         );
 
-        // Publish the entry to make it visible
         await newEntry.publish();
 
         res.status(201).json({ 

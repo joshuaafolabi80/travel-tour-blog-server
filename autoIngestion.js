@@ -7,14 +7,12 @@ const { getManagementEnvironment } = require('./contentful/client');
 
 // --- CONFIGURATION ---
 const EXTERNAL_API_URL = 'https://newsapi.org/v2/everything';
-const CRON_SCHEDULE = '0 */6 * * *'; // Runs every 6 hours (at minute 0)
+const CRON_SCHEDULE = '0 */6 * * *'; 
 // The unique ID for your "Auto Ingestion Bot" Author Entry
 const AUTHOR_FALLBACK_ID = '4WOacPkmp1DHGgDf1ToJGw'; 
-const CONTENT_TYPE_ID = 'theConclaveBlog'; // Your specified Content Type ID
-// ... (rest of helper functions: createSlug, createRichTextContent) ...
+const CONTENT_TYPE_ID = 'theConclaveBlog'; 
 
-// Helper function definitions from the previous response...
-
+// Helper function definitions...
 const createSlug = (text) => {
     return text.toLowerCase()
         .replace(/[^a-z0-9\s-]/g, '')
@@ -51,7 +49,7 @@ const runIngestion = async () => {
     // CRITICAL FIX: Properly await the environment instance by CALLING the function
     let environment; 
     try {
-        environment = await getManagementEnvironment();
+        environment = await getManagementEnvironment(); // <--- FIX IS HERE
     } catch (e) {
         console.error('[INGEST] Failed to retrieve Contentful Environment:', e.message);
         return;
@@ -63,10 +61,10 @@ const runIngestion = async () => {
         // 1. Fetch data from external source
         const newsResponse = await axios.get(EXTERNAL_API_URL, {
           params: {
-            q: 'travel AND tourism destination tips', // More specific query
+            q: 'travel AND tourism destination tips', 
             language: 'en',
             pageSize: 5,
-            apiKey: process.env.NEWS_API_KEY, // Uses key from .env
+            apiKey: process.env.NEWS_API_KEY, 
           },
         });
 
@@ -88,7 +86,7 @@ const runIngestion = async () => {
           
           try {
             // 2. Create and Publish Entry in Contentful
-            const newEntry = await environment.createEntryWithId(
+            const newEntry = await environment.createEntryWithId( // <--- THIS line now works
               CONTENT_TYPE_ID, 
               entryId,       
               {
@@ -96,7 +94,7 @@ const runIngestion = async () => {
                   title: { 'en-US': article.title.substring(0, 250) },
                   slug: { 'en-US': slug },
                   content: { 'en-US': richTextContent },
-                  category: { 'en-US': 'Tourism' }, // Default category
+                  category: { 'en-US': 'Tourism' }, 
                   publishedDate: { 'en-US': new Date(article.publishedAt).toISOString() },
                   author: {
                     'en-US': { sys: { type: 'Link', linkType: 'Entry', id: AUTHOR_FALLBACK_ID } },
