@@ -16,8 +16,8 @@ const cmaClient = contentfulManagement.createClient(
 );
 
 /**
- * CRITICAL FIX: Exports an async function that returns the Environment object.
- * This MUST be awaited by all consumers (server.js, autoIngestion.js).
+ * CRITICAL FIX: Helper function to retrieve the Contentful environment instance (asynchronously).
+ * This function MUST be called with 'await' by server.js and autoIngestion.js.
  */
 const getManagementEnvironment = async () => {
     return cmaClient.environment.get({

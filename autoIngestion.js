@@ -8,11 +8,9 @@ const { getManagementEnvironment } = require('./contentful/client');
 // --- CONFIGURATION ---
 const EXTERNAL_API_URL = 'https://newsapi.org/v2/everything';
 const CRON_SCHEDULE = '0 */6 * * *'; 
-// The unique ID for your "Auto Ingestion Bot" Author Entry
 const AUTHOR_FALLBACK_ID = '4WOacPkmp1DHGgDf1ToJGw'; 
 const CONTENT_TYPE_ID = 'theConclaveBlog'; 
 
-// Helper function definitions...
 const createSlug = (text) => {
     return text.toLowerCase()
         .replace(/[^a-z0-9\s-]/g, '')
@@ -49,7 +47,7 @@ const runIngestion = async () => {
     // CRITICAL FIX: Properly await the environment instance by CALLING the function
     let environment; 
     try {
-        environment = await getManagementEnvironment(); // <--- FIX IS HERE
+        environment = await getManagementEnvironment(); 
     } catch (e) {
         console.error('[INGEST] Failed to retrieve Contentful Environment:', e.message);
         return;
@@ -58,7 +56,6 @@ const runIngestion = async () => {
     try {
         console.log(`[INGEST] Starting ingestion job at ${new Date().toISOString()}`);
         
-        // 1. Fetch data from external source
         const newsResponse = await axios.get(EXTERNAL_API_URL, {
           params: {
             q: 'travel AND tourism destination tips', 
@@ -85,8 +82,8 @@ const runIngestion = async () => {
           const richTextContent = createRichTextContent(article.content || article.description);
           
           try {
-            // 2. Create and Publish Entry in Contentful
-            const newEntry = await environment.createEntryWithId( // <--- THIS line now works
+            // This line now works because 'environment' is the correct CMA object
+            const newEntry = await environment.createEntryWithId(
               CONTENT_TYPE_ID, 
               entryId,       
               {

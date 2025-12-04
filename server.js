@@ -4,7 +4,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer'); 
-// FIX: Change import from 'managementClient' to 'getManagementEnvironment'
+// FIX: Import the new getter function
 const { cdaClient, getManagementEnvironment } = require('./contentful/client');
 const { startIngestionJob } = require('./autoIngestion');
 
@@ -30,7 +30,7 @@ app.use(express.json());
 // --- Contentful Asset Upload Helper Function ---
 const uploadAndLinkAsset = async (file, environment) => {
     if (!file) return null;
-    // ... (rest of the asset upload logic remains the same) ...
+
     try {
         let asset = await environment.createAssetFromFiles({
             fields: {
@@ -62,18 +62,23 @@ const uploadAndLinkAsset = async (file, environment) => {
 
 // --- 1. CDA Endpoint (Public Read Access) ---
 app.get('/api/blog-posts', async (req, res) => {
-  // ... (CDA logic remains the same) ...
-  try {
-    const entries = await cdaClient.getEntries({
-      content_type: CONTENT_TYPE_ID, 
-      order: '-fields.publishedDate', 
-      include: 2, 
-    });
-    res.json(entries.items);
-  } catch (error) {
-    console.error('Error fetching blog posts:', error.message);
-    res.status(500).json({ message: 'Failed to fetch content from Contentful.' });
-  }
+    try {
+        const entries = await cdaClient.getEntries({
+            content_type: CONTENT_TYPE_ID, 
+            order: '-fields.publishedDate', 
+            include: 2, 
+        });
+        
+        // FIX for Frontend blank page: Ensure an array is always returned
+        const posts = entries && Array.isArray(entries.items) ? entries.items : [];
+        
+        res.json(posts);
+        
+    } catch (error) {
+        console.error('Error fetching blog posts (CDA):', error.message);
+        // If the fetch fails completely, return an empty array (200 OK) to prevent frontend crash
+        res.json([]); 
+    }
 });
 
 // --- 2. CMA Endpoint (Admin Write Access) ---
@@ -102,15 +107,13 @@ app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, r
 
     try {
         // CRITICAL FIX: Call the getter function to get the resolved environment object
-        const environment = await getManagementEnvironment(); // <--- FIX IS HERE
+        const environment = await getManagementEnvironment(); 
         let featuredImageLink = null;
         
-        // --- 1. Upload Featured Image if provided ---
         if (featuredImageFile) {
             featuredImageLink = await uploadAndLinkAsset(featuredImageFile, environment);
         }
 
-        // --- 2. Create and Publish Entry ---
         const newEntry = await environment.createEntryWithId(
             CONTENT_TYPE_ID, 
             slug,       
