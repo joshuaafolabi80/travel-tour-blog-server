@@ -2,7 +2,7 @@
 
 const cron = require('node-cron');
 const axios = require('axios');
-// UPDATE: Import the new getter function
+// FIX: Import the new getter function
 const { getManagementEnvironment } = require('./contentful/client');
 
 // --- CONFIGURATION ---
@@ -11,10 +11,10 @@ const CRON_SCHEDULE = '0 */6 * * *'; // Runs every 6 hours (at minute 0)
 // The unique ID for your "Auto Ingestion Bot" Author Entry
 const AUTHOR_FALLBACK_ID = '4WOacPkmp1DHGgDf1ToJGw'; 
 const CONTENT_TYPE_ID = 'theConclaveBlog'; // Your specified Content Type ID
+// ... (rest of helper functions: createSlug, createRichTextContent) ...
 
-/**
- * Creates a unique, URL-friendly slug.
- */
+// Helper function definitions from the previous response...
+
 const createSlug = (text) => {
     return text.toLowerCase()
         .replace(/[^a-z0-9\s-]/g, '')
@@ -23,9 +23,6 @@ const createSlug = (text) => {
         .slice(0, 60);
 };
 
-/**
- * Creates a Rich Text JSON structure from a plain string.
- */
 const createRichTextContent = (content) => {
   return {
     nodeType: 'document',
@@ -51,7 +48,7 @@ const createRichTextContent = (content) => {
  * Main function to run the ingestion process.
  */
 const runIngestion = async () => {
-    // CRITICAL FIX: Properly await the environment instance
+    // CRITICAL FIX: Properly await the environment instance by CALLING the function
     let environment; 
     try {
         environment = await getManagementEnvironment();
@@ -83,7 +80,6 @@ const runIngestion = async () => {
 
         for (const article of articles) {
           const slug = createSlug(article.title);
-          // Create a unique entry ID by combining 'auto-' with the slug and a timestamp segment
           const entryId = `auto-${slug}-${Date.now().toString().slice(-4)}`; 
 
           if (!article.description || article.content.length < 50) continue;
@@ -92,7 +88,6 @@ const runIngestion = async () => {
           
           try {
             // 2. Create and Publish Entry in Contentful
-            // This call should now work because 'environment' is the resolved instance
             const newEntry = await environment.createEntryWithId(
               CONTENT_TYPE_ID, 
               entryId,       
