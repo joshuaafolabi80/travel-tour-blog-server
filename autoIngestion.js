@@ -124,7 +124,7 @@ const startIngestionJob = () => {
     timezone: "Etc/UTC" 
   });
   // Run once immediately when the server starts
-  runIngestion(); 
+  // runIngestion();
 };
 
 module.exports = { 
