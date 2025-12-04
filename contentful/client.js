@@ -11,19 +11,26 @@ const cdaClient = contentful.createClient({
 });
 
 // --- 2. Content Management Client (CMA) - READ/WRITE ---
-// Used by the autoIngestion script and the Admin POST endpoint to create/publish entries.
+// This client is used to access the Space and Environment
 const cmaClient = contentfulManagement.createClient(
     { accessToken: process.env.CMA_ACCESS_TOKEN },
     { type: 'plain' }
 );
 
-// We scope the CMA client to the specific space and 'master' environment
-const managementClient = cmaClient.environment.get({
-    spaceId: process.env.CONTENTFUL_SPACE_ID,
-    environmentId: 'master' 
-});
+/**
+ * Helper function to retrieve the Contentful environment instance (asynchronously).
+ * This ensures the object with management methods is ready before use.
+ */
+const getManagementEnvironment = async () => {
+    return cmaClient.environment.get({
+        spaceId: process.env.CONTENTFUL_SPACE_ID,
+        environmentId: 'master' 
+    });
+};
+
 
 module.exports = {
   cdaClient,
-  managementClient,
+  // Export the function instead of the unresolved Promise
+  getManagementEnvironment, 
 };

@@ -4,7 +4,8 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const multer = require('multer'); // Import multer for file handling
-const { cdaClient, managementClient } = require('./contentful/client');
+// CRITICAL FIX: Change import from 'managementClient' to 'getManagementEnvironment'
+const { cdaClient, getManagementEnvironment } = require('./contentful/client');
 const { startIngestionJob } = require('./autoIngestion');
 
 const app = express();
@@ -117,15 +118,18 @@ app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, r
     };
 
     try {
-        const environment = await managementClient;
+        // CRITICAL FIX: Call the getter function to get the resolved environment object
+        const environment = await getManagementEnvironment();
         let featuredImageLink = null;
         
         // --- 1. Upload Featured Image if provided ---
         if (featuredImageFile) {
+            // Use the correctly resolved 'environment' object
             featuredImageLink = await uploadAndLinkAsset(featuredImageFile, environment);
         }
 
         // --- 2. Create and Publish Entry ---
+        // Use the correctly resolved 'environment' object
         const newEntry = await environment.createEntryWithId(
             CONTENT_TYPE_ID, 
             slug,       
