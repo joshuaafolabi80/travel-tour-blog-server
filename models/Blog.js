@@ -5,37 +5,34 @@ const mongoose = require('mongoose');
 const BlogSchema = new mongoose.Schema({
     title: {
         type: String,
-        required: true,
+        required: [true, 'Title is required'],
         trim: true,
-        unique: true,
-    },
-    slug: {
-        type: String,
-        required: true,
-        unique: true,
-    },
-    content: {
-        type: String, // Storing HTML/Rich Text content
-        required: true,
+        maxlength: [100, 'Title cannot be more than 100 characters']
     },
     category: {
         type: String,
-        required: true,
-        enum: ['Travel', 'Tours', 'Hotels', 'Tourism', 'General'],
+        required: [true, 'Category is required'],
+        enum: ['Travels', 'Tours', 'Hotels', 'Tourism'], // Enforced categories
+        default: 'Travels'
     },
-    author: {
+    summary: {
         type: String,
-        default: 'Admin', // Storing the author name/alias
+        maxlength: [500, 'Summary cannot be more than 500 characters']
     },
-    featuredImage: {
-        type: String, // Storing the Cloudinary URL or base64 data
-        default: '',
+    content: {
+        type: String,
+        required: [true, 'Content is required']
     },
-    publishedDate: {
-        type: Date,
-        default: Date.now,
+    imageUrl: {
+        type: String,
+        default: '' // Cloudinary URL or empty string
     },
-}, { timestamps: true });
+    isPublished: {
+        type: Boolean,
+        default: false
+    }
+}, {
+    timestamps: true // Adds createdAt and updatedAt fields
+});
 
-const Blog = mongoose.model('Blog', BlogSchema);
-module.exports = Blog;
+module.exports = mongoose.model('Blog', BlogSchema);
