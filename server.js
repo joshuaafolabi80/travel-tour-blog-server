@@ -3,157 +3,205 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const multer = require('multer'); 
-// FIX: Import the new getter function
-const { cdaClient, getManagementEnvironment } = require('./contentful/client');
-const { startIngestionJob } = require('./autoIngestion');
+const mongoose = require('mongoose'); // Import mongoose
+const connectDB = require('./db/connection'); // Import connection
+const Blog = require('./models/Blog'); // Import model
+const multer = require('multer');
+const cloudinary = require('cloudinary').v2;
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
 
+// --- INITIALIZATION ---
 const app = express();
 const PORT = process.env.PORT || 5000;
-const CONTENT_TYPE_ID = 'theConclaveBlog'; 
-
-// Setup multer storage (using memory storage for Contentful upload)
-const upload = multer({ storage: multer.memoryStorage() });
-
-// Use the CLIENT_URL from .env (retrieved from Render environment)
 const CLIENT_URL = process.env.CLIENT_URL;
+
+// Configure Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
+
+// Setup Multer storage with Cloudinary
+const storage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'blog_images', // Cloudinary folder
+        format: async (req, file) => 'jpeg', 
+        public_id: (req, file) => `blog-img-${Date.now()}`,
+    },
+});
+
+const upload = multer({ storage: storage });
+
+// Connect to MongoDB
+connectDB(); 
 
 // Middleware
 app.use(cors({
-  origin: CLIENT_URL,
-  methods: ['GET', 'POST'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+    origin: CLIENT_URL,
+    methods: ['GET', 'POST', 'PUT', 'DELETE'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
-
 app.use(express.json());
 
-// --- Contentful Asset Upload Helper Function ---
-const uploadAndLinkAsset = async (file, environment) => {
-    if (!file) return null;
-
-    try {
-        let asset = await environment.createAssetFromFiles({
-            fields: {
-                title: { 'en-US': file.originalname },
-                file: {
-                    'en-US': {
-                        file: file.buffer, 
-                        fileName: file.originalname,
-                        contentType: file.mimetype,
-                    },
-                },
-            },
-        });
-        
-        console.log(`[CMA] Asset upload started for: ${file.originalname}`);
-        asset = await asset.processForLocale('en-US');
-        asset = await asset.publish();
-        console.log(`[CMA] Asset published successfully. ID: ${asset.sys.id}`);
-
-        return {
-            'en-US': { sys: { type: 'Link', linkType: 'Asset', id: asset.sys.id } },
-        };
-    } catch (e) {
-        console.error('Error during Contentful Asset upload/publish:', e.message);
-        throw new Error('Failed to upload and link image asset.');
-    }
+// --- UTILITY ---
+const createSlug = (text) => {
+    return text.toLowerCase()
+        .replace(/[^a-z0-9\s-]/g, '')
+        .trim()
+        .replace(/\s+/g, '-');
 };
 
+// --- ROUTES ---
 
-// --- 1. CDA Endpoint (Public Read Access) ---
-app.get('/api/blog-posts', async (req, res) => {
+// 1. ADMIN CREATE/EDIT POST (CRUD - Create/Update)
+app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, res) => {
+    const { title, content, category, author } = req.body;
+    const slug = createSlug(title);
+    const imageUrl = req.file ? req.file.path : ''; // Cloudinary path is available here
+
+    if (!title || !content || !category) {
+        return res.status(400).json({ message: 'Missing required fields.' });
+    }
+
     try {
-        const entries = await cdaClient.getEntries({
-            content_type: CONTENT_TYPE_ID, 
-            order: '-fields.publishedDate', 
-            include: 2, 
+        const newPost = new Blog({
+            title,
+            slug,
+            content,
+            category,
+            author: author || 'Admin',
+            featuredImage: imageUrl,
+            publishedDate: new Date(),
         });
-        
-        // FIX for Frontend blank page: Ensure an array is always returned
-        const posts = entries && Array.isArray(entries.items) ? entries.items : [];
-        
-        res.json(posts);
-        
+
+        await newPost.save();
+        res.status(201).json({ message: 'Blog post created and published successfully!', postId: newPost._id });
+
     } catch (error) {
-        console.error('Error fetching blog posts (CDA):', error.message);
-        // If the fetch fails completely, return an empty array (200 OK) to prevent frontend crash
-        res.json([]); 
+        console.error('Error creating post:', error.message);
+        if (error.code === 11000) { // Duplicate key error (e.g., duplicate title/slug)
+            return res.status(409).json({ message: 'Post with this title already exists.' });
+        }
+        res.status(500).json({ message: 'Failed to create blog post via MongoDB.', details: error.message });
     }
 });
 
-// --- 2. CMA Endpoint (Admin Write Access) ---
-app.post('/api/admin/create-post', upload.single('featuredImage'), async (req, res) => {
-    const { title, slug, content, authorId, category } = req.body; 
-    const featuredImageFile = req.file;
-
-    if (!title || !slug || !content || !authorId || !category) {
-      if (featuredImageFile) console.warn('File uploaded but post data is incomplete.');
-      return res.status(400).json({ message: 'Missing required fields: title, slug, content, authorId, and category.' });
+app.put('/api/admin/edit-post/:id', upload.single('featuredImage'), async (req, res) => {
+    const { id } = req.params;
+    const { title, content, category, author, existingImage } = req.body;
+    const slug = createSlug(title);
+    
+    // Determine the image URL
+    let imageUrl = existingImage || ''; 
+    if (req.file) {
+        imageUrl = req.file.path;
+        // Optionally, delete the old image from Cloudinary here if needed
     }
 
-    const richTextContent = {
-        nodeType: 'document',
-        data: {},
-        content: [
-            {
-                nodeType: 'paragraph',
-                data: {},
-                content: [
-                    { nodeType: 'text', value: content, marks: [], data: {} },
-                ],
-            },
-        ],
-    };
+    if (!title || !content || !category) {
+        return res.status(400).json({ message: 'Missing required fields.' });
+    }
 
     try {
-        // CRITICAL FIX: Call the getter function to get the resolved environment object
-        const environment = await getManagementEnvironment(); 
-        let featuredImageLink = null;
-        
-        if (featuredImageFile) {
-            featuredImageLink = await uploadAndLinkAsset(featuredImageFile, environment);
-        }
-
-        const newEntry = await environment.createEntryWithId(
-            CONTENT_TYPE_ID, 
-            slug,       
+        const updatedPost = await Blog.findByIdAndUpdate(
+            id,
             {
-                fields: {
-                    title: { 'en-US': title },
-                    slug: { 'en-US': slug },
-                    content: { 'en-US': richTextContent },
-                    category: { 'en-US': category },
-                    publishedDate: { 'en-US': new Date().toISOString() },
-                    author: {
-                        'en-US': { sys: { type: 'Link', linkType: 'Entry', id: authorId } },
-                    },
-                    ...(featuredImageLink && { featuredImage: featuredImageLink }),
-                },
-            }
+                title,
+                slug,
+                content,
+                category,
+                author,
+                featuredImage: imageUrl,
+                // Do not update publishedDate on edit unless explicitly requested
+            },
+            { new: true } // Return the updated document
         );
 
-        await newEntry.publish();
+        if (!updatedPost) {
+            return res.status(404).json({ message: 'Blog post not found.' });
+        }
 
-        res.status(201).json({ 
-            message: 'Blog post created and published successfully!', 
-            entryId: newEntry.sys.id 
-        });
+        res.status(200).json({ message: 'Blog post updated successfully!', postId: updatedPost._id });
+
     } catch (error) {
-        console.error('Error creating post in Contentful:', error.message);
-        res.status(500).json({ 
-            message: 'Failed to create blog post via CMA. Details in server logs.', 
-            details: error.message 
-        });
+        console.error('Error updating post:', error.message);
+        res.status(500).json({ message: 'Failed to update blog post.', details: error.message });
     }
 });
 
 
-// Start the CRON job when the server starts
-startIngestionJob();
+// 2. ADMIN/USER READ ALL POSTS (CRUD - Read) - Admin dashboard/User List
+app.get('/api/blog-posts', async (req, res) => {
+    const { category, search, page = 1, limit = 5 } = req.query;
+    const query = {};
+
+    if (category && category !== 'All') {
+        query.category = category;
+    }
+    if (search) {
+        // Simple text search across title, content, and category
+        query.$or = [
+            { title: { $regex: search, $options: 'i' } },
+            { content: { $regex: search, $options: 'i' } },
+            { category: { $regex: search, $options: 'i' } },
+        ];
+    }
+    
+    try {
+        const totalPosts = await Blog.countDocuments(query);
+        const posts = await Blog.find(query)
+            .sort({ publishedDate: -1 }) // Sort by newest first
+            .limit(limit * 1)
+            .skip((page - 1) * limit);
+
+        res.json({
+            posts,
+            totalPages: Math.ceil(totalPosts / limit),
+            currentPage: Number(page),
+            totalPosts,
+        });
+    } catch (error) {
+        console.error('Error fetching blog posts:', error.message);
+        // Always return a clean structure on error to prevent frontend crash
+        res.status(500).json({ posts: [], totalPages: 0, currentPage: 1, totalPosts: 0, message: error.message });
+    }
+});
+
+
+// 3. ADMIN/USER READ SINGLE POST (CRUD - Read)
+app.get('/api/blog-posts/:id', async (req, res) => {
+    try {
+        const post = await Blog.findById(req.params.id);
+        if (!post) {
+            return res.status(404).json({ message: 'Blog post not found.' });
+        }
+        res.json(post);
+    } catch (error) {
+        console.error('Error fetching single post:', error.message);
+        res.status(500).json({ message: 'Failed to fetch post.' });
+    }
+});
+
+// 4. ADMIN DELETE POST (CRUD - Delete)
+app.delete('/api/admin/delete-post/:id', async (req, res) => {
+    try {
+        const deletedPost = await Blog.findByIdAndDelete(req.params.id);
+        if (!deletedPost) {
+            return res.status(404).json({ message: 'Blog post not found.' });
+        }
+        // Optional: Implement Cloudinary deletion logic here if needed
+        res.status(200).json({ message: 'Blog post deleted successfully!' });
+    } catch (error) {
+        console.error('Error deleting post:', error.message);
+        res.status(500).json({ message: 'Failed to delete post.' });
+    }
+});
+
 
 // Start the Express server
 app.listen(PORT, () => {
-  console.log(`🚀 Express server running on port ${PORT}`);
-  console.log('Ingestion job initialized and first run started...');
-  console.log(`CORS configured for origin: ${CLIENT_URL || 'Not specified in .env'}`);
+    console.log(`🚀 Express server running on port ${PORT}`);
+    console.log(`CORS configured for origin: ${CLIENT_URL || 'Not specified in .env'}`);
 });
