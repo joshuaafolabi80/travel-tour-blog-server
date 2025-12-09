@@ -88,7 +88,7 @@ exports.getAdminPostById = async (req, res) => {
     }
 };
 
-// Create a new post - COMPLETELY REMOVED DUPLICATE CHECK
+// Create a new post - SIMPLIFIED VERSION
 exports.createPost = async (req, res) => {
     try {
         const { title, category, summary, content, isPublished, tags } = req.body;
@@ -103,8 +103,6 @@ exports.createPost = async (req, res) => {
             });
         }
         
-        // REMOVED DUPLICATE TITLE CHECK - Allow same titles
-        
         // Create the post
         const newPost = new Blog({
             title,
@@ -113,7 +111,7 @@ exports.createPost = async (req, res) => {
             content,
             isPublished: isPublished === 'true' || isPublished === true,
             tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(tag => tag.trim())) : [],
-            imageUrl: req.file ? req.file.path : '' // Cloudinary URL if file uploaded
+            imageUrl: req.file ? req.file.path : ''
         });
         
         console.log('💾 Saving new post to database...');
@@ -139,39 +137,6 @@ exports.createPost = async (req, res) => {
                 message: 'Validation error',
                 errors: Object.values(error.errors).map(err => err.message)
             });
-        }
-        
-        // Handle duplicate key error - IGNORE IT AND CONTINUE
-        if (error.code === 11000) {
-            console.log('⚠️ Duplicate key error detected, but continuing anyway...');
-            console.log('⚠️ Error details:', error.message);
-            
-            // Try to create with a slightly modified title
-            try {
-                const modifiedTitle = `${req.body.title} (${Date.now()})`;
-                console.log(`🔄 Retrying with modified title: ${modifiedTitle}`);
-                
-                const retryPost = new Blog({
-                    title: modifiedTitle,
-                    category: req.body.category,
-                    summary: req.body.summary || req.body.content.substring(0, 150) + '...',
-                    content: req.body.content,
-                    isPublished: req.body.isPublished === 'true' || req.body.isPublished === true,
-                    tags: req.body.tags ? (Array.isArray(req.body.tags) ? req.body.tags : req.body.tags.split(',').map(tag => tag.trim())) : [],
-                    imageUrl: req.file ? req.file.path : ''
-                });
-                
-                await retryPost.save();
-                
-                return res.status(201).json({
-                    success: true,
-                    message: 'Blog post created successfully (title was modified to avoid conflict)',
-                    post: retryPost,
-                    note: 'Title was modified due to existing similar title'
-                });
-            } catch (retryError) {
-                console.error('❌ Retry also failed:', retryError);
-            }
         }
         
         res.status(500).json({
@@ -205,7 +170,7 @@ exports.updatePost = async (req, res) => {
             updateData.imageUrl = req.file.path;
         }
         
-        // Update the post - NO DUPLICATE CHECK
+        // Update the post
         const updatedPost = await Blog.findByIdAndUpdate(
             id,
             updateData,
@@ -240,29 +205,6 @@ exports.updatePost = async (req, res) => {
                 message: 'Validation error',
                 errors: Object.values(error.errors).map(err => err.message)
             });
-        }
-        
-        // Handle duplicate key error - IGNORE
-        if (error.code === 11000) {
-            console.log('⚠️ Duplicate key error during update, but continuing...');
-            
-            // Try without the problematic field
-            try {
-                const { title, ...otherData } = req.body;
-                const retryUpdate = await Blog.findByIdAndUpdate(
-                    id,
-                    otherData,
-                    { new: true, runValidators: true }
-                );
-                
-                return res.json({
-                    success: true,
-                    message: 'Post updated (title unchanged to avoid conflict)',
-                    post: retryUpdate
-                });
-            } catch (retryError) {
-                console.error('❌ Retry update failed:', retryError);
-            }
         }
         
         res.status(500).json({
