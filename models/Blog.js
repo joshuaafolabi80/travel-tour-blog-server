@@ -1,5 +1,4 @@
 // travel-tour-blog-server/models/Blog.js
-
 const mongoose = require('mongoose');
 
 const BlogSchema = new mongoose.Schema({
@@ -12,7 +11,7 @@ const BlogSchema = new mongoose.Schema({
     category: {
         type: String,
         required: [true, 'Category is required'],
-        enum: ['Travels', 'Tours', 'Hotels', 'Tourism'], // Enforced categories
+        enum: ['Travels', 'Tours', 'Hotels', 'Tourism'],
         default: 'Travels'
     },
     summary: {
@@ -25,36 +24,33 @@ const BlogSchema = new mongoose.Schema({
     },
     imageUrl: {
         type: String,
-        default: '' // Cloudinary URL or empty string
+        default: ''
     },
     isPublished: {
         type: Boolean,
         default: false
     },
-    // Add slug for SEO-friendly URLs
+    // Remove "index: true" from here to avoid duplicate
     slug: {
         type: String,
-        unique: true,
+        unique: true, // This already creates an index
         lowercase: true,
         trim: true
     },
-    // Add tags for better organization
     tags: [{
         type: String,
         trim: true
     }],
-    // Add view count
     views: {
         type: Number,
         default: 0
     },
-    // Add author reference if you have user system
     author: {
         type: String,
         default: 'Admin'
     }
 }, {
-    timestamps: true // Adds createdAt and updatedAt fields
+    timestamps: true
 });
 
 // Create slug from title before saving
@@ -69,9 +65,9 @@ BlogSchema.pre('save', function(next) {
     next();
 });
 
-// Index for better performance
+// Only keep these indexes (remove the slug index line)
 BlogSchema.index({ isPublished: 1, createdAt: -1 });
 BlogSchema.index({ category: 1 });
-BlogSchema.index({ slug: 1 });
+// REMOVE THIS LINE: BlogSchema.index({ slug: 1 });
 
 module.exports = mongoose.model('Blog', BlogSchema);
