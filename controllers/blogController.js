@@ -1,482 +1,365 @@
-// travel-tour-blog-server/controllers/blogController.js - ENHANCED
+// travel-tour-blog-server/controllers/blogController.js
 const Blog = require('../models/Blog');
-const mongoose = require('mongoose');
-
-// Set query timeout to 10 seconds instead of default
-mongoose.set('maxTimeMS', 10000);
-
-// --- HELPER FUNCTION: Get Query Parameters ---
-const getQueryParams = (req) => {
-    const { search, category, page = 1, limit = 10, isPublished } = req.query;
-    const query = {};
-    
-    // Add isPublished filter if provided
-    if (isPublished !== undefined) {
-        query.isPublished = isPublished === 'true'; 
-    }
-    
-    // Add search filter (search title OR content OR summary)
-    if (search && search.trim() !== '') {
-        const searchRegex = new RegExp(search.trim(), 'i'); // Case-insensitive search
-        query.$or = [
-            { title: searchRegex },
-            { content: searchRegex },
-            { summary: searchRegex }
-        ];
-    }
-    
-    // Add category filter
-    if (category && category !== 'All') {
-        query.category = category;
-    }
-
-    const pageSize = Math.min(parseInt(limit), 50); // Max 50 per page
-    const currentPage = Math.max(1, parseInt(page));
-    const skip = (currentPage - 1) * pageSize;
-
-    return { query, page: currentPage, pageSize, skip };
-};
-
-// --- HELPER: Format response with pagination ---
-const formatPaginationResponse = (posts, total, page, pageSize) => {
-    const totalPages = Math.ceil(total / pageSize);
-    
-    return {
-        success: true,
-        posts,
-        totalPosts: total,
-        currentPage: page,
-        totalPages,
-        hasNextPage: page < totalPages,
-        hasPrevPage: page > 1
-    };
-};
 
 // =================================================================
-// 1. ADMIN Controllers
+// ADMIN CONTROLLERS
 // =================================================================
 
-// GET all posts (published and drafts) for admin dashboard
+// Get all posts (for admin - includes drafts and published)
 exports.getAllAdminPosts = async (req, res) => {
     try {
-        console.log('📊 Fetching admin posts...');
+        const { page = 1, limit = 10, search = '', category = '' } = req.query;
         
-        // Use lean() for faster queries and select only needed fields
-        const posts = await Blog.find({})
-            .select('title category summary imageUrl isPublished updatedAt createdAt')
-            .sort({ updatedAt: -1 })
-            .lean()
-            .maxTimeMS(10000); // Set timeout for this query
-            
-        console.log(`✅ Found ${posts.length} posts`);
+        // Build query
+        let query = {};
         
-        // Transform data for frontend
-        const transformedPosts = posts.map(post => ({
-            _id: post._id,
-            title: post.title,
-            category: post.category,
-            summary: post.summary || '',
-            imageUrl: post.imageUrl || '',
-            isPublished: post.isPublished,
-            updatedAt: post.updatedAt,
-            createdAt: post.createdAt
-        }));
+        // Search functionality
+        if (search) {
+            query.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { summary: { $regex: search, $options: 'i' } },
+                { content: { $regex: search, $options: 'i' } },
+                { tags: { $regex: search, $options: 'i' } }
+            ];
+        }
         
-        res.json({ 
-            success: true, 
-            posts: transformedPosts,
-            count: transformedPosts.length
+        // Filter by category
+        if (category) {
+            query.category = category;
+        }
+        
+        // Get total count
+        const total = await Blog.countDocuments(query);
+        
+        // Get posts with pagination
+        const posts = await Blog.find(query)
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * parseInt(limit))
+            .limit(parseInt(limit));
+        
+        res.json({
+            success: true,
+            posts,
+            count: total,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / limit)
+            }
         });
         
     } catch (error) {
-        console.error('❌ Error fetching admin posts:', error.message);
-        
-        if (error.name === 'MongoTimeoutError') {
-            return res.status(504).json({ 
-                success: false, 
-                message: 'Database query timeout. Please try again with fewer filters.' 
-            });
-        }
-        
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to retrieve admin blog posts.', 
-            error: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error'
+        console.error('Error fetching admin posts:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching posts',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
 
-// GET a single post by ID (for editing)
+// Get single post by ID (for admin editing)
 exports.getAdminPostById = async (req, res) => {
     try {
         const { id } = req.params;
         
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Invalid post ID format.' 
-            });
-        }
-        
-        const post = await Blog.findById(id).maxTimeMS(10000);
+        const post = await Blog.findById(id);
         
         if (!post) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Post not found.' 
+            return res.status(404).json({
+                success: false,
+                message: 'Post not found'
             });
         }
         
-        res.json({ 
-            success: true, 
-            post: {
-                _id: post._id,
-                title: post.title,
-                category: post.category,
-                summary: post.summary || '',
-                content: post.content,
-                imageUrl: post.imageUrl || '',
-                isPublished: post.isPublished,
-                updatedAt: post.updatedAt
-            }
+        res.json({
+            success: true,
+            post
         });
         
     } catch (error) {
-        console.error('❌ Error fetching post by ID:', error.message);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to retrieve post.', 
-            error: error.message 
+        console.error('Error fetching admin post:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching post',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
 
-// POST - Create a new post
+// Create a new post
 exports.createPost = async (req, res) => {
     try {
-        const { title, category, summary, content, isPublished } = req.body;
+        const { title, category, summary, content, isPublished, tags } = req.body;
         
         // Validate required fields
-        if (!title || !title.trim()) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Title is required.' 
+        if (!title || !content || !category) {
+            return res.status(400).json({
+                success: false,
+                message: 'Title, content, and category are required'
             });
         }
         
-        if (!category) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Category is required.' 
-            });
-        }
-        
-        if (!content || !content.trim()) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Content is required.' 
-            });
-        }
-        
-        // Multer/Cloudinary places the uploaded file details on req.file
-        const imageUrl = req.file ? req.file.path : null; 
-
+        // Create the post
         const newPost = new Blog({
-            title: title.trim(),
-            category, 
-            summary: summary ? summary.trim() : '', 
-            content: content.trim(), 
-            imageUrl, 
-            isPublished: isPublished === 'true' || isPublished === true
+            title,
+            category,
+            summary: summary || content.substring(0, 150) + '...',
+            content,
+            isPublished: isPublished === 'true' || isPublished === true,
+            tags: tags ? (Array.isArray(tags) ? tags : tags.split(',').map(tag => tag.trim())) : [],
+            imageUrl: req.file ? req.file.path : '' // Cloudinary URL if file uploaded
         });
         
+        // Save to database
         await newPost.save();
         
-        console.log(`✅ Post created: ${newPost.title}`);
-        
-        res.status(201).json({ 
-            success: true, 
-            message: 'Post created successfully!', 
-            post: newPost 
+        res.status(201).json({
+            success: true,
+            message: 'Blog post created successfully',
+            post: newPost
         });
         
     } catch (error) {
-        console.error('❌ Error creating post:', error.message);
+        console.error('Error creating post:', error);
         
+        // Handle validation errors
         if (error.name === 'ValidationError') {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 message: 'Validation error',
                 errors: Object.values(error.errors).map(err => err.message)
             });
         }
         
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error during post creation.', 
-            error: error.message 
+        // Handle duplicate slug error
+        if (error.code === 11000) {
+            return res.status(409).json({
+                success: false,
+                message: 'A post with similar title already exists'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Error creating post',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
 
-// PUT - Update an existing post
+// Update an existing post
 exports.updatePost = async (req, res) => {
     try {
         const { id } = req.params;
-        const { title, category, summary, content, isPublished, currentImageUrl } = req.body;
-
-        // Validate ID
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Invalid post ID format.' 
-            });
+        const updateData = { ...req.body };
+        
+        // Handle tags if provided
+        if (updateData.tags && typeof updateData.tags === 'string') {
+            updateData.tags = updateData.tags.split(',').map(tag => tag.trim());
         }
         
-        // Validate required fields
-        if (!title || !title.trim()) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Title is required.' 
-            });
+        // Handle boolean conversion for isPublished
+        if (updateData.isPublished !== undefined) {
+            updateData.isPublished = updateData.isPublished === 'true' || updateData.isPublished === true;
         }
         
-        if (!category) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Category is required.' 
-            });
-        }
-        
-        if (!content || !content.trim()) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Content is required.' 
-            });
-        }
-
-        // 1. Determine the final image URL:
-        let newImageUrl = currentImageUrl; // Default: keep existing URL
-
+        // Handle image upload
         if (req.file) {
-            // A NEW file was uploaded: update the URL to the Cloudinary path
-            newImageUrl = req.file.path; 
+            updateData.imageUrl = req.file.path;
         }
-
-        const updateData = {
-            title: title.trim(),
-            category, 
-            summary: summary ? summary.trim() : '', 
-            content: content.trim(), 
-            imageUrl: newImageUrl,
-            isPublished: isPublished === 'true' || isPublished === true,
-            updatedAt: Date.now()
-        };
-
+        
+        // Update the post
         const updatedPost = await Blog.findByIdAndUpdate(
-            id, 
-            updateData, 
+            id,
+            updateData,
             { 
-                new: true, 
-                runValidators: true,
-                maxTimeMS: 10000 
+                new: true, // Return the updated document
+                runValidators: true // Run model validators
             }
         );
         
         if (!updatedPost) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Post not found for update.' 
+            return res.status(404).json({
+                success: false,
+                message: 'Post not found'
             });
         }
         
-        console.log(`✅ Post updated: ${updatedPost.title}`);
-        
-        res.json({ 
-            success: true, 
-            message: 'Post updated successfully!', 
-            post: updatedPost 
+        res.json({
+            success: true,
+            message: 'Post updated successfully',
+            post: updatedPost
         });
-
-    } catch (error) {
-        console.error('❌ Error updating post:', error.message);
         
+    } catch (error) {
+        console.error('Error updating post:', error);
+        
+        // Handle validation errors
         if (error.name === 'ValidationError') {
-            return res.status(400).json({ 
-                success: false, 
+            return res.status(400).json({
+                success: false,
                 message: 'Validation error',
                 errors: Object.values(error.errors).map(err => err.message)
             });
         }
         
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error during post update.', 
-            error: error.message 
+        res.status(500).json({
+            success: false,
+            message: 'Error updating post',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
 
-// DELETE - Delete a post
+// Delete a post
 exports.deletePost = async (req, res) => {
     try {
         const { id } = req.params;
         
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Invalid post ID format.' 
+        const deletedPost = await Blog.findByIdAndDelete(id);
+        
+        if (!deletedPost) {
+            return res.status(404).json({
+                success: false,
+                message: 'Post not found'
             });
         }
         
-        const post = await Blog.findByIdAndDelete(id);
+        res.json({
+            success: true,
+            message: 'Post deleted successfully'
+        });
         
-        if (!post) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Post not found for deletion.' 
-            });
+    } catch (error) {
+        console.error('Error deleting post:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error deleting post',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+// =================================================================
+// USER CONTROLLERS (Published posts only)
+// =================================================================
+
+// Get published posts with pagination and filtering
+exports.getPublishedPosts = async (req, res) => {
+    try {
+        const { page = 1, limit = 10, search = '', category = '' } = req.query;
+        
+        // Build query - only published posts
+        let query = { isPublished: true };
+        
+        // Search functionality
+        if (search) {
+            query.$or = [
+                { title: { $regex: search, $options: 'i' } },
+                { summary: { $regex: search, $options: 'i' } },
+                { content: { $regex: search, $options: 'i' } },
+                { tags: { $regex: search, $options: 'i' } }
+            ];
         }
         
-        console.log(`🗑️ Post deleted: ${post.title}`);
+        // Filter by category
+        if (category) {
+            query.category = category;
+        }
         
-        res.json({ 
-            success: true, 
-            message: 'Post deleted successfully.',
-            deletedPost: {
-                id: post._id,
-                title: post.title
+        // Get total count
+        const total = await Blog.countDocuments(query);
+        
+        // Get posts with pagination
+        const posts = await Blog.find(query)
+            .sort({ createdAt: -1 })
+            .skip((page - 1) * parseInt(limit))
+            .limit(parseInt(limit))
+            .select('-content'); // Don't send full content in list view
+        
+        res.json({
+            success: true,
+            posts,
+            count: total,
+            pagination: {
+                page: parseInt(page),
+                limit: parseInt(limit),
+                total,
+                pages: Math.ceil(total / limit)
             }
         });
         
     } catch (error) {
-        console.error('❌ Error deleting post:', error.message);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Server error during post deletion.', 
-            error: error.message 
+        console.error('Error fetching published posts:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching posts',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
 
-
-// =================================================================
-// 2. USER Controllers (Public Access)
-// =================================================================
-
-// GET all published posts with pagination and filtering
-exports.getPublishedPosts = async (req, res) => {
-    try {
-        const { query, page, pageSize, skip } = getQueryParams(req);
-        query.isPublished = true; // Crucial: Only show published posts to users
-
-        console.log(`📰 Fetching published posts - Page: ${page}, Category: ${query.category || 'All'}`);
-
-        const totalPosts = await Blog.countDocuments(query).maxTimeMS(10000);
-        
-        // Select only fields needed for listing
-        const posts = await Blog.find(query)
-            .select('title category summary imageUrl updatedAt')
-            .sort({ updatedAt: -1 })
-            .skip(skip)
-            .limit(pageSize)
-            .lean()
-            .maxTimeMS(10000);
-
-        console.log(`✅ Found ${posts.length} published posts (Total: ${totalPosts})`);
-
-        res.json(formatPaginationResponse(posts, totalPosts, page, pageSize));
-        
-    } catch (error) {
-        console.error('❌ Error fetching published posts:', error.message);
-        
-        if (error.name === 'MongoTimeoutError') {
-            return res.status(504).json({ 
-                success: false, 
-                message: 'Database query timeout. Please try again with fewer filters.' 
-            });
-        }
-        
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to retrieve published blog posts.', 
-            error: error.message 
-        });
-    }
-};
-
-// GET a single published post by ID
+// Get a single published post by ID or slug
 exports.getPublishedPostById = async (req, res) => {
     try {
         const { id } = req.params;
         
-        if (!mongoose.Types.ObjectId.isValid(id)) {
-            return res.status(400).json({ 
-                success: false, 
-                message: 'Invalid post ID format.' 
-            });
-        }
+        // Try to find by ID or slug
+        const query = isObjectId(id) 
+            ? { _id: id, isPublished: true }
+            : { slug: id, isPublished: true };
         
-        const post = await Blog.findOne({ 
-            _id: id, 
-            isPublished: true 
-        }).maxTimeMS(10000);
+        const post = await Blog.findOne(query);
         
         if (!post) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Post not found or not published.' 
+            return res.status(404).json({
+                success: false,
+                message: 'Post not found or not published'
             });
         }
         
-        // Format content for display (if needed)
-        const formattedPost = {
-            _id: post._id,
-            title: post.title,
-            category: post.category,
-            summary: post.summary || '',
-            content: post.content,
-            imageUrl: post.imageUrl || '',
-            updatedAt: post.updatedAt,
-            createdAt: post.createdAt
-        };
+        // Increment view count
+        post.views += 1;
+        await post.save();
         
-        res.json({ 
-            success: true, 
-            post: formattedPost 
+        res.json({
+            success: true,
+            post
         });
         
     } catch (error) {
-        console.error('❌ Error fetching published post:', error.message);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to retrieve public blog post.', 
-            error: error.message 
+        console.error('Error fetching published post:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching post',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
 
-// GET unique categories for filtering
+// Get list of unique categories from published posts
 exports.getCategories = async (req, res) => {
     try {
-        const categories = await Blog.distinct('category', { 
-            isPublished: true 
-        }).maxTimeMS(10000);
+        const categories = await Blog.distinct('category', { isPublished: true });
         
-        // Sort categories alphabetically
-        const sortedCategories = categories.sort();
-        
-        res.json({ 
-            success: true, 
-            categories: sortedCategories 
+        res.json({
+            success: true,
+            categories: categories.filter(cat => cat) // Remove null/empty values
         });
         
     } catch (error) {
-        console.error('❌ Error fetching categories:', error.message);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to retrieve categories.', 
-            error: error.message 
+        console.error('Error fetching categories:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Error fetching categories',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 };
+
+// Helper function to check if string is a valid ObjectId
+function isObjectId(str) {
+    return /^[0-9a-fA-F]{24}$/.test(str);
+}

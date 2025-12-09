@@ -7,7 +7,7 @@ const BlogSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Title is required'],
         trim: true,
-        maxlength: [100, 'Title cannot be more than 100 characters']
+        maxlength: [200, 'Title cannot be more than 200 characters']
     },
     category: {
         type: String,
@@ -30,9 +30,48 @@ const BlogSchema = new mongoose.Schema({
     isPublished: {
         type: Boolean,
         default: false
+    },
+    // Add slug for SEO-friendly URLs
+    slug: {
+        type: String,
+        unique: true,
+        lowercase: true,
+        trim: true
+    },
+    // Add tags for better organization
+    tags: [{
+        type: String,
+        trim: true
+    }],
+    // Add view count
+    views: {
+        type: Number,
+        default: 0
+    },
+    // Add author reference if you have user system
+    author: {
+        type: String,
+        default: 'Admin'
     }
 }, {
     timestamps: true // Adds createdAt and updatedAt fields
 });
+
+// Create slug from title before saving
+BlogSchema.pre('save', function(next) {
+    if (this.isModified('title') || !this.slug) {
+        this.slug = this.title
+            .toLowerCase()
+            .replace(/[^\w\s]/gi, '')
+            .replace(/\s+/g, '-')
+            .replace(/-+/g, '-');
+    }
+    next();
+});
+
+// Index for better performance
+BlogSchema.index({ isPublished: 1, createdAt: -1 });
+BlogSchema.index({ category: 1 });
+BlogSchema.index({ slug: 1 });
 
 module.exports = mongoose.model('Blog', BlogSchema);

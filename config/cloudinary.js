@@ -1,33 +1,45 @@
 // travel-tour-blog-server/config/cloudinary.js
-
 const cloudinary = require('cloudinary').v2;
 const { CloudinaryStorage } = require('multer-storage-cloudinary');
 const multer = require('multer');
 
-// --- 1. Cloudinary Configuration ---
-// Requires CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET in your .env file
+// Configure Cloudinary
 cloudinary.config({
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET
 });
 
-// --- 2. Storage Engine Configuration ---
+// Create storage engine for multer
 const storage = new CloudinaryStorage({
     cloudinary: cloudinary,
     params: {
-        folder: 'blog-featured-images', // Cloudinary folder to store blog images
-        allowed_formats: ['jpg', 'png', 'jpeg'],
-        // Optional: Resize and optimize the image upon upload
-        transformation: [{ width: 800, height: 600, crop: 'limit' }] 
+        folder: 'blog-images',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+        transformation: [
+            { width: 1200, height: 800, crop: 'limit' },
+            { quality: 'auto:good' }
+        ]
     }
 });
 
-// --- 3. Multer Middleware ---
-// This is the middleware function we will use in the routes
-const upload = multer({ 
+// Create multer upload instance
+const upload = multer({
     storage: storage,
-    limits: { fileSize: 5 * 1024 * 1024 } // 5MB limit
+    limits: {
+        fileSize: 5 * 1024 * 1024 // 5MB limit
+    },
+    fileFilter: (req, file, cb) => {
+        const allowedTypes = /jpeg|jpg|png|gif|webp/;
+        const extname = allowedTypes.test(file.originalname.toLowerCase());
+        const mimetype = allowedTypes.test(file.mimetype);
+        
+        if (mimetype && extname) {
+            return cb(null, true);
+        } else {
+            cb(new Error('Only image files are allowed (jpeg, jpg, png, gif, webp)'));
+        }
+    }
 });
 
-module.exports = { cloudinary, upload };
+module.exports = { upload, cloudinary };
