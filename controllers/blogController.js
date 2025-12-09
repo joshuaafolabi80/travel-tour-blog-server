@@ -88,10 +88,12 @@ exports.getAdminPostById = async (req, res) => {
     }
 };
 
-// Create a new post
+// Create a new post - COMPLETELY REMOVED DUPLICATE CHECK
 exports.createPost = async (req, res) => {
     try {
         const { title, category, summary, content, isPublished, tags } = req.body;
+        
+        console.log('📝 Creating new post with title:', title);
         
         // Validate required fields
         if (!title || !content || !category) {
@@ -100,6 +102,8 @@ exports.createPost = async (req, res) => {
                 message: 'Title, content, and category are required'
             });
         }
+        
+        // REMOVED DUPLICATE TITLE CHECK - Allow same titles
         
         // Create the post
         const newPost = new Blog({
@@ -112,8 +116,12 @@ exports.createPost = async (req, res) => {
             imageUrl: req.file ? req.file.path : '' // Cloudinary URL if file uploaded
         });
         
+        console.log('💾 Saving new post to database...');
+        
         // Save to database
         await newPost.save();
+        
+        console.log('✅ Post created successfully:', newPost._id);
         
         res.status(201).json({
             success: true,
@@ -122,7 +130,7 @@ exports.createPost = async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Error creating post:', error);
+        console.error('❌ Error creating post:', error);
         
         // Handle validation errors
         if (error.name === 'ValidationError') {
@@ -133,12 +141,37 @@ exports.createPost = async (req, res) => {
             });
         }
         
-        // Handle duplicate slug error
+        // Handle duplicate key error - IGNORE IT AND CONTINUE
         if (error.code === 11000) {
-            return res.status(409).json({
-                success: false,
-                message: 'A post with similar title already exists'
-            });
+            console.log('⚠️ Duplicate key error detected, but continuing anyway...');
+            console.log('⚠️ Error details:', error.message);
+            
+            // Try to create with a slightly modified title
+            try {
+                const modifiedTitle = `${req.body.title} (${Date.now()})`;
+                console.log(`🔄 Retrying with modified title: ${modifiedTitle}`);
+                
+                const retryPost = new Blog({
+                    title: modifiedTitle,
+                    category: req.body.category,
+                    summary: req.body.summary || req.body.content.substring(0, 150) + '...',
+                    content: req.body.content,
+                    isPublished: req.body.isPublished === 'true' || req.body.isPublished === true,
+                    tags: req.body.tags ? (Array.isArray(req.body.tags) ? req.body.tags : req.body.tags.split(',').map(tag => tag.trim())) : [],
+                    imageUrl: req.file ? req.file.path : ''
+                });
+                
+                await retryPost.save();
+                
+                return res.status(201).json({
+                    success: true,
+                    message: 'Blog post created successfully (title was modified to avoid conflict)',
+                    post: retryPost,
+                    note: 'Title was modified due to existing similar title'
+                });
+            } catch (retryError) {
+                console.error('❌ Retry also failed:', retryError);
+            }
         }
         
         res.status(500).json({
@@ -155,6 +188,8 @@ exports.updatePost = async (req, res) => {
         const { id } = req.params;
         const updateData = { ...req.body };
         
+        console.log('📝 Updating post:', id);
+        
         // Handle tags if provided
         if (updateData.tags && typeof updateData.tags === 'string') {
             updateData.tags = updateData.tags.split(',').map(tag => tag.trim());
@@ -170,7 +205,7 @@ exports.updatePost = async (req, res) => {
             updateData.imageUrl = req.file.path;
         }
         
-        // Update the post
+        // Update the post - NO DUPLICATE CHECK
         const updatedPost = await Blog.findByIdAndUpdate(
             id,
             updateData,
@@ -187,6 +222,8 @@ exports.updatePost = async (req, res) => {
             });
         }
         
+        console.log('✅ Post updated successfully:', id);
+        
         res.json({
             success: true,
             message: 'Post updated successfully',
@@ -194,7 +231,7 @@ exports.updatePost = async (req, res) => {
         });
         
     } catch (error) {
-        console.error('Error updating post:', error);
+        console.error('❌ Error updating post:', error);
         
         // Handle validation errors
         if (error.name === 'ValidationError') {
@@ -203,6 +240,29 @@ exports.updatePost = async (req, res) => {
                 message: 'Validation error',
                 errors: Object.values(error.errors).map(err => err.message)
             });
+        }
+        
+        // Handle duplicate key error - IGNORE
+        if (error.code === 11000) {
+            console.log('⚠️ Duplicate key error during update, but continuing...');
+            
+            // Try without the problematic field
+            try {
+                const { title, ...otherData } = req.body;
+                const retryUpdate = await Blog.findByIdAndUpdate(
+                    id,
+                    otherData,
+                    { new: true, runValidators: true }
+                );
+                
+                return res.json({
+                    success: true,
+                    message: 'Post updated (title unchanged to avoid conflict)',
+                    post: retryUpdate
+                });
+            } catch (retryError) {
+                console.error('❌ Retry update failed:', retryError);
+            }
         }
         
         res.status(500).json({
@@ -218,6 +278,8 @@ exports.deletePost = async (req, res) => {
     try {
         const { id } = req.params;
         
+        console.log('🗑️ Deleting post:', id);
+        
         const deletedPost = await Blog.findByIdAndDelete(id);
         
         if (!deletedPost) {
@@ -227,13 +289,15 @@ exports.deletePost = async (req, res) => {
             });
         }
         
+        console.log('✅ Post deleted successfully:', id);
+        
         res.json({
             success: true,
             message: 'Post deleted successfully'
         });
         
     } catch (error) {
-        console.error('Error deleting post:', error);
+        console.error('❌ Error deleting post:', error);
         res.status(500).json({
             success: false,
             message: 'Error deleting post',
@@ -306,12 +370,10 @@ exports.getPublishedPostById = async (req, res) => {
     try {
         const { id } = req.params;
         
-        // Try to find by ID or slug
-        const query = isObjectId(id) 
-            ? { _id: id, isPublished: true }
-            : { slug: id, isPublished: true };
-        
-        const post = await Blog.findOne(query);
+        const post = await Blog.findOne({ 
+            _id: id, 
+            isPublished: true 
+        });
         
         if (!post) {
             return res.status(404).json({
