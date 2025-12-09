@@ -1,4 +1,4 @@
-// travel-tour-blog-server/models/Blog.js
+// Update Blog.js model to REMOVE slug field:
 const mongoose = require('mongoose');
 
 const BlogSchema = new mongoose.Schema({
@@ -30,13 +30,7 @@ const BlogSchema = new mongoose.Schema({
         type: Boolean,
         default: false
     },
-    // Remove "index: true" from here to avoid duplicate
-    slug: {
-        type: String,
-        unique: true, // This already creates an index
-        lowercase: true,
-        trim: true
-    },
+    // REMOVE THE ENTIRE slug FIELD
     tags: [{
         type: String,
         trim: true
@@ -53,21 +47,8 @@ const BlogSchema = new mongoose.Schema({
     timestamps: true
 });
 
-// Create slug from title before saving
-BlogSchema.pre('save', function(next) {
-    if (this.isModified('title') || !this.slug) {
-        this.slug = this.title
-            .toLowerCase()
-            .replace(/[^\w\s]/gi, '')
-            .replace(/\s+/g, '-')
-            .replace(/-+/g, '-');
-    }
-    next();
-});
-
-// Only keep these indexes (remove the slug index line)
+// REMOVE the pre-save middleware for slug
 BlogSchema.index({ isPublished: 1, createdAt: -1 });
 BlogSchema.index({ category: 1 });
-// REMOVE THIS LINE: BlogSchema.index({ slug: 1 });
 
 module.exports = mongoose.model('Blog', BlogSchema);
