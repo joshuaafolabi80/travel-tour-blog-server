@@ -5,6 +5,7 @@ const cors = require('cors');
 const connectDB = require('./db/connection');
 const blogRoutes = require('./routes/blogRoutes');
 const multer = require('multer');
+const https = require('https'); // ADD THIS
 
 // --- INITIALIZATION ---
 const app = express();
@@ -179,6 +180,23 @@ app.use((err, req, res, next) => {
     });
 });
 
+// Function to keep server warm
+const keepServerWarm = () => {
+    const url = 'https://travel-tour-blog-server.onrender.com/health';
+    
+    https.get(url, (res) => {
+        let data = '';
+        res.on('data', (chunk) => {
+            data += chunk;
+        });
+        res.on('end', () => {
+            console.log(`🏓 Keep-alive ping successful: ${res.statusCode} - ${new Date().toISOString()}`);
+        });
+    }).on('error', (err) => {
+        console.log(`🏓 Keep-alive error: ${err.message} - ${new Date().toISOString()}`);
+    });
+};
+
 // Start server with better error handling
 const startServer = async () => {
     try {
@@ -210,6 +228,17 @@ const startServer = async () => {
 ║ Admin Posts:  http://localhost:${PORT}/api/admin/blog/posts ║
 ╚══════════════════════════════════════════════════════╝
             `);
+            
+            // Start keep-alive for production
+            if (process.env.NODE_ENV === 'production') {
+                console.log('🔧 Starting keep-alive service...');
+                
+                // Initial ping
+                keepServerWarm();
+                
+                // Ping every 4 minutes (Render free tier stays awake with 5 min intervals)
+                setInterval(keepServerWarm, 4 * 60 * 1000); // 4 minutes
+            }
         });
         
     } catch (error) {
