@@ -1,4 +1,4 @@
-// travel-tour-blog-server/server.js - UPDATED WITH INDEX FIX
+// travel-tour-blog-server/server.js - UPDATED WITH INDEX FIX AND CONTACT FORM
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -6,7 +6,7 @@ const connectDB = require('./db/connection');
 const blogRoutes = require('./routes/blogRoutes');
 const multer = require('multer');
 const https = require('https');
-const mongoose = require('mongoose'); // ADD THIS AT TOP
+const mongoose = require('mongoose');
 
 // --- INITIALIZATION ---
 const app = express();
@@ -140,6 +140,9 @@ app.get('/', (req, res) => {
                 getPublishedPosts: 'GET /api/user/blog/posts',
                 getSinglePost: 'GET /api/user/blog/posts/:id',
                 getCategories: 'GET /api/user/blog/categories'
+            },
+            contact: {
+                submitForm: 'POST /api/contact/submit'
             }
         },
         note: 'All blog routes are prefixed with /api'
@@ -148,6 +151,68 @@ app.get('/', (req, res) => {
 
 // Use the blog routes
 app.use('/api', blogRoutes);
+
+// --- CONTACT FORM SUBMISSION ROUTE ---
+app.post('/api/contact/submit', async (req, res) => {
+    try {
+        const { firstName, lastName, email, phone, address, interests, experience, message, hearAboutUs } = req.body;
+        
+        console.log('📧 Received contact form submission from:', email);
+        
+        // Validate required fields
+        if (!firstName || !lastName || !email) {
+            return res.status(400).json({
+                success: false,
+                message: 'First name, last name, and email are required'
+            });
+        }
+        
+        // Create form data object
+        const formData = {
+            firstName,
+            lastName,
+            email,
+            phone: phone || '',
+            address: address || '',
+            interests: interests || [],
+            experience: experience || '',
+            message: message || '',
+            hearAboutUs: hearAboutUs || ''
+        };
+        
+        console.log('📋 Form data received:', {
+            name: `${firstName} ${lastName}`,
+            email: email,
+            phone: phone || 'Not provided',
+            interestsCount: interests?.length || 0
+        });
+        
+        // Try to send email using nodemailer if available
+        try {
+            const emailSender = require('./utils/emailSender');
+            await emailSender.sendContactForm(formData);
+            console.log('✅ Email sent successfully for:', email);
+        } catch (emailError) {
+            console.log('⚠️ Email sending failed, but continuing (for testing):', emailError.message);
+            // Continue even if email fails - log to console
+            console.log('📝 Form submission (email failed but data received):', formData);
+        }
+        
+        console.log('✅ Contact form processed successfully for:', email);
+        
+        res.json({
+            success: true,
+            message: 'Form submitted successfully. We will contact you soon!'
+        });
+        
+    } catch (error) {
+        console.error('❌ Contact form error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to submit form. Please try again later.'
+        });
+    }
+});
 
 // Test endpoint for quick verification
 app.get('/api/test', (req, res) => {
@@ -167,6 +232,7 @@ app.use('*', (req, res) => {
             '/': 'API documentation',
             '/health': 'Health check with MongoDB status',
             '/api/test': 'Quick API test',
+            '/api/contact/submit': 'Contact form submission',
             '/api/admin/blog/posts': 'Get all blog posts (Admin)',
             '/api/user/blog/posts': 'Get published posts (User)'
         }
@@ -278,6 +344,7 @@ const startServer = async () => {
 ╠══════════════════════════════════════════════════════╣
 ║ Health Check: http://localhost:${PORT}/health        ║
 ║ API Test:     http://localhost:${PORT}/api/test      ║
+║ Contact Form: http://localhost:${PORT}/api/contact/submit ║
 ║ Admin Posts:  http://localhost:${PORT}/api/admin/blog/posts ║
 ╚══════════════════════════════════════════════════════╝
             `);
