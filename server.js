@@ -1,4 +1,4 @@
-// travel-tour-blog-server/server.js - UPDATED WITH INDEX FIX AND CONTACT FORM
+// travel-tour-blog-server/server.js - UPDATED WITH EMAIL FIXES
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -143,6 +143,9 @@ app.get('/', (req, res) => {
             },
             contact: {
                 submitForm: 'POST /api/contact/submit'
+            },
+            test: {
+                emailTest: 'GET /api/test-email'
             }
         },
         note: 'All blog routes are prefixed with /api'
@@ -152,12 +155,17 @@ app.get('/', (req, res) => {
 // Use the blog routes
 app.use('/api', blogRoutes);
 
-// --- CONTACT FORM SUBMISSION ROUTE ---
+// --- CONTACT FORM SUBMISSION ROUTE - UPDATED WITH COMPLETE EMAIL SUPPORT ---
 app.post('/api/contact/submit', async (req, res) => {
     try {
         const { firstName, lastName, email, phone, address, interests, experience, message, hearAboutUs } = req.body;
         
-        console.log('📧 Received contact form submission from:', email);
+        console.log('📧 ==========================================');
+        console.log('📧 CONTACT FORM SUBMISSION RECEIVED');
+        console.log('📧 From:', email);
+        console.log('📧 Name:', `${firstName} ${lastName}`);
+        console.log('📧 Time:', new Date().toISOString());
+        console.log('📧 ==========================================');
         
         // Validate required fields
         if (!firstName || !lastName || !email) {
@@ -180,36 +188,141 @@ app.post('/api/contact/submit', async (req, res) => {
             hearAboutUs: hearAboutUs || ''
         };
         
-        console.log('📋 Form data received:', {
+        console.log('📋 Form data summary:', {
             name: `${firstName} ${lastName}`,
             email: email,
             phone: phone || 'Not provided',
             interestsCount: interests?.length || 0
         });
         
-        // Try to send email using nodemailer if available
+        // Send emails using nodemailer
+        let adminEmailSent = false;
+        let userEmailSent = false;
+        let emailError = null;
+        
         try {
             const emailSender = require('./utils/emailSender');
+            
+            // 1. Send notification to ADMIN (joshuaafolabi80@gmail.com)
+            console.log('📤 Sending admin notification to joshuaafolabi80@gmail.com...');
             await emailSender.sendContactForm(formData);
-            console.log('✅ Email sent successfully for:', email);
+            adminEmailSent = true;
+            console.log('✅ Admin notification sent successfully');
+            
+            // 2. Send confirmation to USER
+            console.log(`📤 Sending confirmation to user: ${email}...`);
+            await emailSender.sendConfirmationEmail(formData);
+            userEmailSent = true;
+            console.log('✅ User confirmation sent successfully');
+            
         } catch (emailError) {
-            console.log('⚠️ Email sending failed, but continuing (for testing):', emailError.message);
-            // Continue even if email fails - log to console
-            console.log('📝 Form submission (email failed but data received):', formData);
+            console.error('❌ Email sending error:', emailError.message);
+            console.error('❌ Email stack:', emailError.stack);
+            
+            // Log specific email issues
+            if (emailError.code === 'EAUTH') {
+                console.error('🔐 Authentication failed - check Gmail app password');
+            } else if (emailError.code === 'ESOCKET') {
+                console.error('🌐 Network error - check internet connection');
+            } else if (emailError.code === 'EENVELOPE') {
+                console.error('✉️ Email address error - invalid recipient');
+            }
         }
+        
+        // Log email status
+        console.log('📊 Email sending results:', {
+            adminEmailSent,
+            userEmailSent,
+            adminEmail: 'joshuaafolabi80@gmail.com',
+            userEmail: email
+        });
+        
+        // Save to database if you want (optional)
+        // const ContactSubmission = require('./models/ContactSubmission');
+        // await ContactSubmission.create(formData);
         
         console.log('✅ Contact form processed successfully for:', email);
         
+        // Return success even if emails failed (so user doesn't see error)
         res.json({
             success: true,
-            message: 'Form submitted successfully. We will contact you soon!'
+            message: 'Form submitted successfully! A confirmation email has been sent to you.',
+            emails: {
+                adminNotification: adminEmailSent ? 'Sent' : 'Failed',
+                userConfirmation: userEmailSent ? 'Sent' : 'Failed'
+            }
         });
         
     } catch (error) {
-        console.error('❌ Contact form error:', error);
+        console.error('❌ Contact form processing error:', error);
+        console.error('❌ Error stack:', error.stack);
+        
         res.status(500).json({
             success: false,
             message: 'Failed to submit form. Please try again later.'
+        });
+    }
+});
+
+// --- EMAIL TESTING ENDPOINT ---
+app.get('/api/test-email', async (req, res) => {
+    try {
+        console.log('🧪 ==========================================');
+        console.log('🧪 TESTING EMAIL SYSTEM');
+        console.log('🧪 Time:', new Date().toISOString());
+        console.log('🧪 ==========================================');
+        
+        const emailSender = require('./utils/emailSender');
+        
+        const testData = {
+            firstName: 'Test',
+            lastName: 'User',
+            email: 'joshuaafolabi80@gmail.com', // Send test to yourself
+            phone: '+234 123 456 7890',
+            address: 'Lagos, Nigeria',
+            interests: ['Travel Writing', 'Adventure Travel', 'Cultural Tourism'],
+            experience: 'Testing the email system to ensure both admin and user emails work correctly.',
+            message: 'This is a test email from the server to verify the email system is working.',
+            hearAboutUs: 'Google Search'
+        };
+        
+        console.log('🧪 Test data prepared');
+        
+        // Test both email functions
+        console.log('📤 Testing admin email...');
+        const adminResult = await emailSender.sendContactForm(testData);
+        console.log('✅ Admin email sent:', adminResult.messageId);
+        
+        console.log('📤 Testing user confirmation email...');
+        const userResult = await emailSender.sendConfirmationEmail(testData);
+        console.log('✅ User confirmation email sent:', userResult.messageId);
+        
+        res.json({
+            success: true,
+            message: 'Test emails sent successfully to joshuaafolabi80@gmail.com',
+            timestamp: new Date().toISOString(),
+            results: {
+                adminEmail: 'Sent',
+                userEmail: 'Sent',
+                adminMessageId: adminResult.messageId,
+                userMessageId: userResult.messageId
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Email test failed:', error);
+        console.error('❌ Error details:', {
+            message: error.message,
+            code: error.code,
+            stack: error.stack
+        });
+        
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            code: error.code,
+            message: 'Email test failed. Check server logs.',
+            timestamp: new Date().toISOString()
         });
     }
 });
@@ -219,7 +332,12 @@ app.get('/api/test', (req, res) => {
     res.json({
         success: true,
         message: 'API is working!',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
+        endpoints: {
+            health: '/health',
+            testEmail: '/api/test-email',
+            contactForm: 'POST /api/contact/submit'
+        }
     });
 });
 
@@ -232,7 +350,8 @@ app.use('*', (req, res) => {
             '/': 'API documentation',
             '/health': 'Health check with MongoDB status',
             '/api/test': 'Quick API test',
-            '/api/contact/submit': 'Contact form submission',
+            '/api/test-email': 'Test email system',
+            '/api/contact/submit': 'Contact form submission (POST)',
             '/api/admin/blog/posts': 'Get all blog posts (Admin)',
             '/api/user/blog/posts': 'Get published posts (User)'
         }
@@ -344,7 +463,8 @@ const startServer = async () => {
 ╠══════════════════════════════════════════════════════╣
 ║ Health Check: http://localhost:${PORT}/health        ║
 ║ API Test:     http://localhost:${PORT}/api/test      ║
-║ Contact Form: http://localhost:${PORT}/api/contact/submit ║
+║ Email Test:   http://localhost:${PORT}/api/test-email║
+║ Contact Form: POST http://localhost:${PORT}/api/contact/submit ║
 ║ Admin Posts:  http://localhost:${PORT}/api/admin/blog/posts ║
 ╚══════════════════════════════════════════════════════╝
             `);
