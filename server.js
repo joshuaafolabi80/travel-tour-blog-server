@@ -1,9 +1,9 @@
+// travel-tour-blog-server/server.js
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const connectDB = require('./db/connection');
 const blogRoutes = require('./routes/blogRoutes');
-const multer = require('multer');
 const http = require('http');
 const mongoose = require('mongoose');
 const { Server } = require('socket.io');
@@ -38,9 +38,9 @@ io.on('connection', (socket) => {
         socket.join('admin-room');
     });
     
-    socket.on('user-connected', (userId) => {
-        console.log('👤 User connected:', userId);
-        socket.join(`user-${userId}`);
+    socket.on('user-connected', (userEmail) => {
+        console.log('👤 User connected to socket:', userEmail);
+        socket.join(`user-${userEmail}`);
     });
     
     socket.on('disconnect', () => {
@@ -106,7 +106,7 @@ app.get('/', (req, res) => {
 // Use the blog routes
 app.use('/api', blogRoutes);
 
-// --- NEW: SUBMISSION ROUTES ---
+// --- SUBMISSION ROUTES ---
 const Submission = require('./models/Submission');
 
 // 1. Save submission (REPLACES EMAIL)
@@ -199,7 +199,7 @@ app.get('/api/submissions/user/:email', async (req, res) => {
     }
 });
 
-// 4. Admin reply to submission
+// 4. Admin reply to submission - SIMPLIFIED AND FIXED
 app.post('/api/submissions/:id/reply', async (req, res) => {
     try {
         const { adminReply, adminId } = req.body;
@@ -229,13 +229,24 @@ app.post('/api/submissions/:id/reply', async (req, res) => {
         
         await submission.save();
         
-        // Notify user via socket
+        // Notify user via socket - SIMPLIFIED: use email as room identifier
         const io = req.app.get('socketio');
+        console.log('🔔 Notifying user via email room:', `user-${submission.email}`);
+        
         io.to(`user-${submission.email}`).emit('admin-reply', {
             submissionId: submission._id,
             message: adminReply,
             submission: submission.toObject()
         });
+        
+        // Also broadcast to all clients for fallback
+        io.emit('admin-reply-broadcast', {
+            submissionId: submission._id,
+            message: adminReply,
+            email: submission.email
+        });
+        
+        console.log('✅ Reply sent successfully to submission:', submissionId);
         
         res.json({ 
             success: true, 
@@ -245,9 +256,11 @@ app.post('/api/submissions/:id/reply', async (req, res) => {
         
     } catch (error) {
         console.error('❌ Reply error:', error);
+        console.error('Error details:', error.message);
+        console.error('Error stack:', error.stack);
         res.status(500).json({ 
             success: false, 
-            message: 'Failed to send reply' 
+            message: 'Failed to send reply: ' + error.message 
         });
     }
 });
@@ -355,6 +368,60 @@ app.get('/api/submissions/user/:email/unread-count', async (req, res) => {
     }
 });
 
+// 9. Delete submission
+app.delete('/api/submissions/:id', async (req, res) => {
+    try {
+        const submissionId = req.params.id;
+        
+        const submission = await Submission.findById(submissionId);
+        if (!submission) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Submission not found' 
+            });
+        }
+        
+        await Submission.findByIdAndDelete(submissionId);
+        
+        console.log('🗑️ Submission deleted:', submissionId);
+        
+        res.json({ 
+            success: true, 
+            message: 'Submission deleted successfully'
+        });
+        
+    } catch (error) {
+        console.error('❌ Delete error:', error);
+        res.status(500).json({ 
+            success: false, 
+            message: 'Failed to delete submission' 
+        });
+    }
+});
+
+// Test endpoint for debugging
+app.get('/api/debug-submission/:id', async (req, res) => {
+    try {
+        const submission = await Submission.findById(req.params.id);
+        if (!submission) {
+            return res.status(404).json({ 
+                success: false, 
+                message: 'Submission not found' 
+            });
+        }
+        
+        res.json({ 
+            success: true, 
+            submission 
+        });
+    } catch (error) {
+        res.status(500).json({ 
+            success: false, 
+            message: error.message 
+        });
+    }
+});
+
 // Test endpoint
 app.get('/api/test-submissions', async (req, res) => {
     try {
@@ -367,7 +434,8 @@ app.get('/api/test-submissions', async (req, res) => {
                 submit: 'POST /api/contact/submit',
                 adminList: 'GET /api/submissions/admin',
                 userList: 'GET /api/submissions/user/:email',
-                adminReply: 'POST /api/submissions/:id/reply'
+                adminReply: 'POST /api/submissions/:id/reply',
+                delete: 'DELETE /api/submissions/:id'
             }
         });
     } catch (error) {

@@ -1,3 +1,4 @@
+// travel-tour-blog-server/models/Submission.js
 const mongoose = require('mongoose');
 
 const submissionSchema = new mongoose.Schema({
