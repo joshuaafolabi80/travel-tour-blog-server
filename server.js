@@ -66,6 +66,17 @@ app.use((req, res, next) => {
     next();
 });
 
+// Test endpoint - ADD THIS FOR DEBUGGING
+app.get('/api/status', (req, res) => {
+    res.json({
+        status: 'online',
+        service: 'Travel Tour Blog API',
+        version: '2.0.0',
+        time: new Date().toISOString(),
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected'
+    });
+});
+
 // Health check
 app.get('/health', async (req, res) => {
     try {
@@ -108,6 +119,9 @@ app.use('/api', blogRoutes);
 
 // --- SUBMISSION ROUTES ---
 const Submission = require('./models/Submission');
+
+// Debug: Check if Submission model loads
+console.log('🔍 Submission model loaded:', Submission ? 'YES' : 'NO');
 
 // 1. Save submission (REPLACES EMAIL)
 app.post('/api/contact/submit', async (req, res) => {
@@ -199,68 +213,104 @@ app.get('/api/submissions/user/:email', async (req, res) => {
     }
 });
 
-// 4. Admin reply to submission - SIMPLIFIED AND FIXED
+// 4. Admin reply to submission - FIXED AND SIMPLIFIED
 app.post('/api/submissions/:id/reply', async (req, res) => {
+    console.log('🔵 REPLY ENDPOINT CALLED!');
+    console.log('🔵 Submission ID:', req.params.id);
+    console.log('🔵 Request body:', JSON.stringify(req.body));
+    
     try {
         const { adminReply, adminId } = req.body;
         const submissionId = req.params.id;
         
-        console.log('💬 Admin replying to submission:', submissionId);
-        
-        const submission = await Submission.findById(submissionId);
-        if (!submission) {
-            return res.status(404).json({ 
-                success: false, 
-                message: 'Submission not found' 
+        if (!adminReply || adminReply.trim() === '') {
+            return res.status(400).json({
+                success: false,
+                message: 'Reply message is required'
             });
         }
         
-        // Update submission with reply
+        console.log('💬 Admin replying to submission:', submissionId);
+        
+        const submission = await Submission.findById(submissionId);
+        
+        if (!submission) {
+            console.log('❌ Submission not found:', submissionId);
+            return res.status(404).json({
+                success: false,
+                message: 'Submission not found'
+            });
+        }
+        
+        console.log('✅ Found submission for:', submission.email);
+        
+        // Update submission
         submission.adminReply = {
-            message: adminReply,
+            message: adminReply.trim(),
             repliedAt: new Date(),
             adminId: adminId || 'admin'
         };
         submission.status = 'replied';
-        submission.isReadByUser = false; // Mark as unread for user
+        submission.isReadByUser = false;
         
-        // Increment user notification count
-        submission.notificationCount.user = (submission.notificationCount.user || 0) + 1;
+        // Initialize notificationCount if not exists
+        if (!submission.notificationCount) {
+            submission.notificationCount = { admin: 0, user: 0 };
+        }
+        submission.notificationCount.user += 1;
         
         await submission.save();
+        console.log('✅ Submission updated successfully');
         
-        // Notify user via socket - SIMPLIFIED: use email as room identifier
+        // Get socket.io instance
         const io = req.app.get('socketio');
-        console.log('🔔 Notifying user via email room:', `user-${submission.email}`);
+        if (io) {
+            const userRoom = `user-${submission.email}`;
+            console.log('🔔 Sending socket notification to room:', userRoom);
+            
+            io.to(userRoom).emit('admin-reply', {
+                submissionId: submission._id,
+                message: adminReply,
+                repliedAt: new Date(),
+                email: submission.email
+            });
+        }
         
-        io.to(`user-${submission.email}`).emit('admin-reply', {
-            submissionId: submission._id,
-            message: adminReply,
-            submission: submission.toObject()
-        });
-        
-        // Also broadcast to all clients for fallback
-        io.emit('admin-reply-broadcast', {
-            submissionId: submission._id,
-            message: adminReply,
-            email: submission.email
-        });
-        
-        console.log('✅ Reply sent successfully to submission:', submissionId);
-        
-        res.json({ 
-            success: true, 
+        res.json({
+            success: true,
             message: 'Reply sent successfully',
-            submission 
+            submission: {
+                _id: submission._id,
+                email: submission.email,
+                adminReply: submission.adminReply,
+                status: submission.status
+            }
         });
         
     } catch (error) {
-        console.error('❌ Reply error:', error);
-        console.error('Error details:', error.message);
+        console.error('❌ ERROR in reply endpoint:');
+        console.error('Error message:', error.message);
         console.error('Error stack:', error.stack);
-        res.status(500).json({ 
-            success: false, 
-            message: 'Failed to send reply: ' + error.message 
+        
+        // Check for specific error types
+        if (error.name === 'CastError') {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid submission ID format'
+            });
+        }
+        
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                message: 'Validation error: ' + error.message
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Internal server error',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
 });
@@ -308,7 +358,7 @@ app.put('/api/submissions/:id/read-user', async (req, res) => {
         }
         
         submission.isReadByUser = true;
-        submission.notificationCount.user = 0; // Reset notification count
+        submission.notificationCount.user = 0;
         
         await submission.save();
         
@@ -399,7 +449,7 @@ app.delete('/api/submissions/:id', async (req, res) => {
     }
 });
 
-// Test endpoint for debugging
+// Test endpoint for debugging submissions
 app.get('/api/debug-submission/:id', async (req, res) => {
     try {
         const submission = await Submission.findById(req.params.id);
@@ -412,7 +462,16 @@ app.get('/api/debug-submission/:id', async (req, res) => {
         
         res.json({ 
             success: true, 
-            submission 
+            submission: {
+                _id: submission._id,
+                email: submission.email,
+                firstName: submission.firstName,
+                lastName: submission.lastName,
+                status: submission.status,
+                adminReply: submission.adminReply,
+                isReadByUser: submission.isReadByUser,
+                notificationCount: submission.notificationCount
+            }
         });
     } catch (error) {
         res.status(500).json({ 
@@ -422,14 +481,33 @@ app.get('/api/debug-submission/:id', async (req, res) => {
     }
 });
 
+// Simple test endpoint for reply
+app.post('/api/test-reply', (req, res) => {
+    console.log('✅ Test reply endpoint hit!');
+    console.log('📦 Request body:', req.body);
+    res.json({
+        success: true,
+        message: 'Test endpoint works!',
+        received: req.body,
+        timestamp: new Date().toISOString()
+    });
+});
+
 // Test endpoint
 app.get('/api/test-submissions', async (req, res) => {
     try {
         const count = await Submission.countDocuments();
+        const recent = await Submission.find().sort({ createdAt: -1 }).limit(3);
+        
         res.json({
             success: true,
             message: 'Submissions system is working',
             totalSubmissions: count,
+            recentSubmissions: recent.map(s => ({
+                _id: s._id,
+                email: s.email,
+                status: s.status
+            })),
             endpoints: {
                 submit: 'POST /api/contact/submit',
                 adminList: 'GET /api/submissions/admin',
@@ -443,11 +521,21 @@ app.get('/api/test-submissions', async (req, res) => {
     }
 });
 
-// 404 handler
+// 404 handler - MUST BE LAST
 app.use('*', (req, res) => {
+    console.log('❌ 404 - Endpoint not found:', req.originalUrl);
     res.status(404).json({
         error: 'Endpoint not found',
-        message: `The requested endpoint ${req.originalUrl} does not exist`
+        message: `The requested endpoint ${req.originalUrl} does not exist`,
+        availableEndpoints: [
+            '/api/status',
+            '/api/contact/submit',
+            '/api/submissions/admin',
+            '/api/submissions/user/:email',
+            '/api/submissions/:id/reply',
+            '/api/test-reply',
+            '/api/debug-submission/:id'
+        ]
     });
 });
 
@@ -468,6 +556,7 @@ server.listen(PORT, () => {
     console.log(`
 ╔══════════════════════════════════════════════════════╗
 ║        🚀 TRAVEL TOUR BLOG SERVER STARTED           ║
+║        🕒 ${new Date().toISOString()}                 ║
 ╠══════════════════════════════════════════════════════╣
 ║ Port:         ${PORT}                                ║
 ║ Environment:  ${process.env.NODE_ENV || 'development'}║
@@ -475,8 +564,10 @@ server.listen(PORT, () => {
 ║ Socket.IO:    ✅ Active                              ║
 ║ Submissions:  ✅ Dashboard System                    ║
 ╠══════════════════════════════════════════════════════╣
-║ Health:       http://localhost:${PORT}/health        ║
-║ Test:         http://localhost:${PORT}/api/test-submissions ║
+║ Test URLs:                                          ║
+║ • Health:     http://localhost:${PORT}/health        ║
+║ • Status:     http://localhost:${PORT}/api/status    ║
+║ • Test:       http://localhost:${PORT}/api/test-submissions ║
 ╚══════════════════════════════════════════════════════╝
     `);
 });
