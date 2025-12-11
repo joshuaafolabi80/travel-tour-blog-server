@@ -213,7 +213,7 @@ app.get('/api/submissions/user/:email', async (req, res) => {
     }
 });
 
-// 4. Admin reply to submission - FIXED AND SIMPLIFIED
+// 4. Admin reply to submission - FIXED: REMOVED adminId FROM adminReply OBJECT
 app.post('/api/submissions/:id/reply', async (req, res) => {
     console.log('🔵 REPLY ENDPOINT CALLED!');
     console.log('🔵 Submission ID:', req.params.id);
@@ -244,11 +244,13 @@ app.post('/api/submissions/:id/reply', async (req, res) => {
         
         console.log('✅ Found submission for:', submission.email);
         
-        // Update submission
+        // FIX: Update submission WITHOUT adminId in adminReply object
+        // The schema expects adminId to be ObjectId but we're sending string
+        // So we remove it from adminReply object
         submission.adminReply = {
             message: adminReply.trim(),
-            repliedAt: new Date(),
-            adminId: adminId || 'admin'
+            repliedAt: new Date()
+            // REMOVED: adminId: adminId || 'admin' - This was causing the validation error
         };
         submission.status = 'replied';
         submission.isReadByUser = false;
@@ -296,14 +298,16 @@ app.post('/api/submissions/:id/reply', async (req, res) => {
         if (error.name === 'CastError') {
             return res.status(400).json({
                 success: false,
-                message: 'Invalid submission ID format'
+                message: 'Invalid submission ID format or validation error'
             });
         }
         
         if (error.name === 'ValidationError') {
+            console.error('🔍 Validation error details:', error.errors);
             return res.status(400).json({
                 success: false,
-                message: 'Validation error: ' + error.message
+                message: 'Validation error: ' + error.message,
+                details: process.env.NODE_ENV === 'development' ? error.errors : undefined
             });
         }
         
