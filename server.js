@@ -43,6 +43,12 @@ io.on('connection', (socket) => {
         socket.join(`user-${userEmail}`);
     });
     
+    // ADD THIS: Listen for newsletter subscription notifications
+    socket.on('subscribe-newsletter', (data) => {
+        console.log('📧 New newsletter subscription via socket:', data.email);
+        socket.broadcast.to('admin-room').emit('new-newsletter-subscriber', data);
+    });
+    
     socket.on('disconnect', () => {
         console.log('🔌 Socket disconnected:', socket.id);
     });
@@ -525,6 +531,229 @@ app.get('/api/test-submissions', async (req, res) => {
     }
 });
 
+// ======================
+// NEWSLETTER ROUTES
+// ======================
+
+const Newsletter = require('./models/Newsletter');
+
+// 1. Subscribe to newsletter
+app.post('/api/newsletter/subscribe', async (req, res) => {
+    try {
+        const { name, email } = req.body;
+        
+        console.log('📧 Newsletter subscription:', email);
+        
+        if (!email || !email.includes('@')) {
+            return res.status(400).json({
+                success: false,
+                message: 'Valid email is required'
+            });
+        }
+        
+        // Check if already subscribed
+        let subscriber = await Newsletter.findOne({ email: email.toLowerCase() });
+        
+        if (subscriber) {
+            // Update existing subscriber
+            subscriber.name = name || subscriber.name;
+            subscriber.subscriptionCount += 1;
+            subscriber.isActive = true;
+            subscriber.subscribedAt = new Date();
+            await subscriber.save();
+            
+            console.log('✅ Updated existing subscriber:', email);
+        } else {
+            // Create new subscriber
+            subscriber = new Newsletter({
+                name: name || 'Subscriber',
+                email: email.toLowerCase(),
+                source: 'blog',
+                isActive: true
+            });
+            
+            await subscriber.save();
+            console.log('✅ New subscriber added:', email);
+        }
+        
+        // Notify admin via socket
+        const io = req.app.get('socketio');
+        if (io) {
+            io.to('admin-room').emit('new-newsletter-subscriber', {
+                subscriber: {
+                    name: subscriber.name,
+                    email: subscriber.email,
+                    subscribedAt: subscriber.subscribedAt
+                },
+                notification: true
+            });
+        }
+        
+        res.json({
+            success: true,
+            message: 'Successfully subscribed to newsletter!',
+            subscriber: {
+                name: subscriber.name,
+                email: subscriber.email,
+                subscribedAt: subscriber.subscribedAt
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Newsletter subscription error:', error);
+        
+        if (error.code === 11000) {
+            return res.status(400).json({
+                success: false,
+                message: 'This email is already subscribed'
+            });
+        }
+        
+        res.status(500).json({
+            success: false,
+            message: 'Failed to subscribe to newsletter'
+        });
+    }
+});
+
+// 2. Get all newsletter subscribers for admin
+app.get('/api/newsletter/subscribers', async (req, res) => {
+    try {
+        const { search, page = 1, limit = 10 } = req.query;
+        const pageNum = parseInt(page);
+        const limitNum = parseInt(limit);
+        const skip = (pageNum - 1) * limitNum;
+        
+        let query = { isActive: true };
+        
+        if (search) {
+            query.$or = [
+                { email: { $regex: search, $options: 'i' } },
+                { name: { $regex: search, $options: 'i' } }
+            ];
+        }
+        
+        const subscribers = await Newsletter.find(query)
+            .sort({ subscribedAt: -1 })
+            .skip(skip)
+            .limit(limitNum);
+        
+        const total = await Newsletter.countDocuments(query);
+        
+        res.json({
+            success: true,
+            subscribers,
+            total,
+            page: pageNum,
+            pages: Math.ceil(total / limitNum)
+        });
+        
+    } catch (error) {
+        console.error('❌ Error fetching subscribers:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch subscribers'
+        });
+    }
+});
+
+// 3. Get subscriber statistics
+app.get('/api/newsletter/stats', async (req, res) => {
+    try {
+        const total = await Newsletter.countDocuments();
+        const active = await Newsletter.countDocuments({ isActive: true });
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        const newToday = await Newsletter.countDocuments({ subscribedAt: { $gte: today } });
+        const last7Days = new Date();
+        last7Days.setDate(last7Days.getDate() - 7);
+        const newLast7Days = await Newsletter.countDocuments({ subscribedAt: { $gte: last7Days } });
+        
+        res.json({
+            success: true,
+            stats: {
+                total,
+                active,
+                newToday,
+                newLast7Days
+            }
+        });
+        
+    } catch (error) {
+        console.error('❌ Error fetching newsletter stats:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to fetch newsletter statistics'
+        });
+    }
+});
+
+// 4. Unsubscribe from newsletter
+app.post('/api/newsletter/unsubscribe', async (req, res) => {
+    try {
+        const { email } = req.body;
+        
+        if (!email) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email is required'
+            });
+        }
+        
+        const subscriber = await Newsletter.findOne({ email: email.toLowerCase() });
+        
+        if (!subscriber) {
+            return res.status(404).json({
+                success: false,
+                message: 'Subscriber not found'
+            });
+        }
+        
+        subscriber.isActive = false;
+        await subscriber.save();
+        
+        console.log('📧 Unsubscribed:', email);
+        
+        res.json({
+            success: true,
+            message: 'Successfully unsubscribed from newsletter'
+        });
+        
+    } catch (error) {
+        console.error('❌ Unsubscribe error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to unsubscribe'
+        });
+    }
+});
+
+// 5. Export subscribers (CSV)
+app.get('/api/newsletter/export', async (req, res) => {
+    try {
+        const subscribers = await Newsletter.find({ isActive: true })
+            .sort({ subscribedAt: -1 });
+        
+        let csv = 'Name,Email,Subscribed At,Status\n';
+        
+        subscribers.forEach(sub => {
+            const date = new Date(sub.subscribedAt).toISOString().split('T')[0];
+            csv += `"${sub.name || ''}","${sub.email}","${date}","Active"\n`;
+        });
+        
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', 'attachment; filename=newsletter-subscribers.csv');
+        res.send(csv);
+        
+    } catch (error) {
+        console.error('❌ Export error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to export subscribers'
+        });
+    }
+});
+
 // 404 handler - MUST BE LAST
 app.use('*', (req, res) => {
     console.log('❌ 404 - Endpoint not found:', req.originalUrl);
@@ -538,7 +767,12 @@ app.use('*', (req, res) => {
             '/api/submissions/user/:email',
             '/api/submissions/:id/reply',
             '/api/test-reply',
-            '/api/debug-submission/:id'
+            '/api/debug-submission/:id',
+            '/api/newsletter/subscribe',
+            '/api/newsletter/subscribers',
+            '/api/newsletter/stats',
+            '/api/newsletter/unsubscribe',
+            '/api/newsletter/export'
         ]
     });
 });
@@ -567,6 +801,7 @@ server.listen(PORT, () => {
 ║ MongoDB:      ${mongoose.connection.readyState === 1 ? '✅ Connected' : '❌ Disconnected'} ║
 ║ Socket.IO:    ✅ Active                              ║
 ║ Submissions:  ✅ Dashboard System                    ║
+║ Newsletter:   ✅ Subscription System                 ║
 ╠══════════════════════════════════════════════════════╣
 ║ Test URLs:                                          ║
 ║ • Health:     http://localhost:${PORT}/health        ║
